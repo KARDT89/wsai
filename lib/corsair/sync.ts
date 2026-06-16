@@ -1,10 +1,20 @@
 import { addDays, subDays } from "date-fns"
 
 import { getCorsairInstance, type CorsairPluginId } from "@/lib/corsair/server"
+import { prisma } from "@/lib/db"
 
 type SyncResult = {
   plugin: CorsairPluginId
   synced: number
+}
+
+export const syncableCorsairPlugins = ["gmail", "googlecalendar"] as const
+
+export type SyncableCorsairPluginId = (typeof syncableCorsairPlugins)[number]
+
+export type CorsairSyncTarget = {
+  tenantId: string
+  plugin: SyncableCorsairPluginId
 }
 
 export async function syncCorsairPlugin(
@@ -20,6 +30,51 @@ export async function syncCorsairPlugin(
   }
 
   return { plugin, synced: 0 }
+}
+
+export function isSyncableCorsairPlugin(
+  plugin: string
+): plugin is SyncableCorsairPluginId {
+  return syncableCorsairPlugins.includes(plugin as SyncableCorsairPluginId)
+}
+
+export async function listConnectedSyncTargets(): Promise<CorsairSyncTarget[]> {
+  const accounts = await prisma.corsairAccount.findMany({
+    where: {
+      dek: {
+        not: null,
+      },
+      integration: {
+        name: {
+          in: [...syncableCorsairPlugins],
+        },
+      },
+    },
+    select: {
+      tenantId: true,
+      integration: {
+        select: {
+          name: true,
+        },
+      },
+    },
+  })
+
+  const uniqueTargets = new Map<string, CorsairSyncTarget>()
+
+  for (const account of accounts) {
+    if (!isSyncableCorsairPlugin(account.integration.name)) {
+      continue
+    }
+
+    const key = `${account.tenantId}:${account.integration.name}`
+    uniqueTargets.set(key, {
+      tenantId: account.tenantId,
+      plugin: account.integration.name,
+    })
+  }
+
+  return Array.from(uniqueTargets.values())
 }
 
 export async function syncPrimaryCorsairPlugins(tenantId: string) {
@@ -47,18 +102,33 @@ async function syncGmail(tenantId: string): Promise<SyncResult> {
   })
   const threads = response.threads ?? []
 
+  const threadDetails = await Promise.all(
+    threads.slice(0, 25).map((thread) =>
+      thread.id
+        ? gmailApi.threads.get({
+            id: thread.id,
+            format: "full",
+          })
+        : null
+    )
+  )
+  const messageIds = new Set<string>()
+
+  for (const thread of threadDetails) {
+    for (const message of thread?.messages ?? []) {
+      if (message.id) {
+        messageIds.add(message.id)
+      }
+    }
+  }
+
   await Promise.all(
-    threads
-      .slice(0, 25)
-      .map((thread) =>
-        thread.id
-          ? gmailApi.threads.get({
-              id: thread.id,
-              format: "full",
-            })
-          : null
-      )
-      .filter(Boolean)
+    [...messageIds].slice(0, 75).map((id) =>
+      gmailApi.messages.get({
+        id,
+        format: "full",
+      })
+    )
   )
 
   await gmailApi.labels.list({})

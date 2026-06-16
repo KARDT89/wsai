@@ -132,18 +132,26 @@ function mapThreadEntity(
 
   const latestMessage = latestMailMessage(messages)
   const labelIds = getStringArray(data, "labelIds", "label_ids", "labels")
+  const latestRawMessage = latestRawMailMessage(getArray(data, "messages"))
+  const latestRawRecord = latestRawMessage ? asRecord(latestRawMessage) : {}
   const subject =
     getHeader(data, "Subject") ??
     getString(data, "subject") ??
+    getHeader(latestRawRecord, "Subject") ??
+    getString(latestRawRecord, "subject") ??
     latestMessage?.body.slice(0, 72) ??
     "(no subject)"
   const fromHeader =
     getHeader(data, "From") ??
     getString(data, "from", "sender", "fromEmail") ??
+    getHeader(latestRawRecord, "From") ??
+    getString(latestRawRecord, "from", "sender", "fromEmail") ??
     latestMessage?.author
   const parsedSender = parseAddress(fromHeader)
   const timestamp =
     getString(data, "lastMessageAt", "last_message_at", "internalDate", "date") ??
+    getHeader(latestRawRecord, "Date") ??
+    getString(latestRawRecord, "internalDate", "date", "createdAt") ??
     latestMessage?.timestamp ??
     entity.updatedAt.toISOString()
 
@@ -231,15 +239,21 @@ function mapMailMessage(
   data: JsonRecord,
   fallbackDate: Date
 ): MailMessage {
-  const fromHeader = getHeader(data, "From") ?? getString(data, "from", "sender")
+  const fromHeader =
+    getHeader(data, "From") ?? getString(data, "from", "sender", "fromEmail")
   const parsedSender = parseAddress(fromHeader)
   const timestamp =
+    getHeader(data, "Date") ??
     getString(data, "internalDate", "date", "createdAt", "created_at") ??
     fallbackDate.toISOString()
 
   return {
     id,
-    author: parsedSender.name || getString(data, "fromName", "senderName") || "Unknown sender",
+    author:
+      parsedSender.name ||
+      parsedSender.email ||
+      getString(data, "fromName", "senderName") ||
+      "Unknown sender",
     email: parsedSender.email,
     meta: formatDateTime(timestamp),
     body:
@@ -317,6 +331,17 @@ function getArray(record: JsonRecord, ...keys: string[]) {
     if (Array.isArray(value)) return value
   }
   return []
+}
+
+function latestRawMailMessage(messages: unknown[]) {
+  return [...messages].sort((a, b) => {
+    const left = asRecord(a)
+    const right = asRecord(b)
+    return (
+      toTime(getHeader(left, "Date") ?? getString(left, "internalDate", "date")) -
+      toTime(getHeader(right, "Date") ?? getString(right, "internalDate", "date"))
+    )
+  }).at(-1)
 }
 
 function getStringArray(record: JsonRecord, ...keys: string[]) {

@@ -5,17 +5,34 @@ import type { CorsairPlugin } from "corsair/core"
 import { setupCorsair, type SetupCredentials } from "corsair/setup"
 import { Pool } from "pg"
 
+import { enqueueCorsairSync } from "@/inngest/events"
+import type { SyncableCorsairPluginId } from "@/lib/corsair/sync"
+
 const globalForCorsair = globalThis as unknown as {
   corsairPool?: Pool
 }
 
-const gmailPlugin = withOAuthScopes(gmail(), [
-  "https://www.googleapis.com/auth/gmail.readonly",
-])
+const gmailPlugin = withOAuthScopes(
+  gmail({
+    webhookHooks: {
+      messageChanged: {
+        after: (ctx) => enqueueWebhookSync(ctx, "gmail"),
+      },
+    },
+  }),
+  ["https://www.googleapis.com/auth/gmail.readonly"]
+)
 
-const googleCalendarPlugin = withOAuthScopes(googlecalendar(), [
-  "https://www.googleapis.com/auth/calendar.readonly",
-])
+const googleCalendarPlugin = withOAuthScopes(
+  googlecalendar({
+    webhookHooks: {
+      onEventChanged: {
+        after: (ctx) => enqueueWebhookSync(ctx, "googlecalendar"),
+      },
+    },
+  }),
+  ["https://www.googleapis.com/auth/calendar.readonly"]
+)
 
 export const corsairPlugins = [gmailPlugin, googleCalendarPlugin] as const
 
@@ -139,6 +156,21 @@ function googleCredentialLabels() {
     "CORSAIR_GOOGLE_CLIENT_SECRET",
     "or GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET",
   ]
+}
+
+async function enqueueWebhookSync(
+  ctx: Record<string, unknown>,
+  plugin: SyncableCorsairPluginId
+) {
+  if (typeof ctx.tenantId !== "string") {
+    return
+  }
+
+  await enqueueCorsairSync({
+    tenantId: ctx.tenantId,
+    plugin,
+    reason: "corsair_webhook",
+  })
 }
 
 function withOAuthScopes<TPlugin extends CorsairPlugin>(
