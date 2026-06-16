@@ -51,7 +51,7 @@ export async function POST(request: Request) {
         },
       })
 
-    await syncGmailMailbox(session.user.id, "drafts").catch(() => null)
+    void syncGmailMailbox(session.user.id, "drafts").catch(() => null)
 
     return NextResponse.json({ draft: result })
   } catch (error) {

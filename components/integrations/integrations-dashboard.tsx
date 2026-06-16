@@ -68,16 +68,14 @@ export function IntegrationsDashboard() {
     mutationFn: syncIntegration,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["integrations"] })
-      queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })
-      queryClient.invalidateQueries({ queryKey: ["calendar", "events"] })
     },
   })
   const disconnectMutation = useMutation({
     mutationFn: disconnectIntegration,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["integrations"] })
-      queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })
-      queryClient.invalidateQueries({ queryKey: ["calendar", "events"] })
+      queryClient.removeQueries({ queryKey: ["mail", "threads"] })
+      queryClient.removeQueries({ queryKey: ["calendar", "events"] })
     },
   })
 

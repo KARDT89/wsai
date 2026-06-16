@@ -105,11 +105,17 @@ export async function syncPrimaryCorsairPlugins(tenantId: string) {
 }
 
 async function syncGmail(tenantId: string): Promise<SyncResult> {
-  const result = await syncGmailMailbox(tenantId, "inbox")
+  const results = await Promise.allSettled(
+    gmailMailboxes.map((mailbox) => syncGmailMailbox(tenantId, mailbox))
+  )
+
+  const synced = results.reduce((total, result) => {
+    return total + (result.status === "fulfilled" ? result.value.synced : 0)
+  }, 0)
 
   return {
     plugin: "gmail",
-    synced: result.synced,
+    synced,
   }
 }
 

@@ -104,19 +104,61 @@ export function MailWorkspace() {
   })
   const threadActionMutation = useMutation({
     mutationFn: runMailAction,
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({ queryKey: ["mail", "threads", selectedMailbox] })
+      const previous = queryClient.getQueryData<MailThread[]>(["mail", "threads", selectedMailbox])
+
+      queryClient.setQueryData<MailThread[]>(
+        ["mail", "threads", selectedMailbox],
+        (old) => {
+          if (!old) return old
+
+          if (
+            variables.action === "archive" ||
+            variables.action === "trash" ||
+            variables.action === "untrash"
+          ) {
+            return old.filter((t) => t.corsairId !== variables.threadId)
+          }
+
+          if (variables.action === "star") {
+            return selectedMailbox === "starred"
+              ? old
+              : old.map((t) =>
+                  t.corsairId === variables.threadId ? { ...t, starred: true } : t
+                )
+          }
+
+          if (variables.action === "unstar") {
+            return selectedMailbox === "starred"
+              ? old.filter((t) => t.corsairId !== variables.threadId)
+              : old.map((t) =>
+                  t.corsairId === variables.threadId ? { ...t, starred: false } : t
+                )
+          }
+
+          return old
+        }
+      )
+
+      return { previous, mailbox: selectedMailbox }
+    },
     onSuccess: (_data, variables) => {
       toast.success(getActionSuccessLabel(variables.action))
       void queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })
     },
-    onError: (error) => {
+    onError: (error, _variables, context) => {
+      if (context?.previous !== undefined) {
+        queryClient.setQueryData(["mail", "threads", context.mailbox], context.previous)
+      }
       toast.error(error instanceof Error ? error.message : "Unable to update thread")
     },
   })
   const mailboxSyncMutation = useMutation({
     mutationFn: syncMailbox,
-    onSuccess: () => {
+    onSuccess: (_data, mailbox) => {
       void queryClient.invalidateQueries({
-        queryKey: ["mail", "threads", selectedMailbox],
+        queryKey: ["mail", "threads", mailbox],
       })
     },
     onError: (error) => {
@@ -128,8 +170,13 @@ export function MailWorkspace() {
   const currentMailboxName =
     mailboxItems.find((item) => item.id === selectedMailbox)?.name ?? "Inbox"
 
+  const syncedMailboxesRef = React.useRef<Set<Mailbox>>(new Set())
+
   React.useEffect(() => {
-    syncSelectedMailbox(selectedMailbox)
+    if (!syncedMailboxesRef.current.has(selectedMailbox)) {
+      syncedMailboxesRef.current.add(selectedMailbox)
+      syncSelectedMailbox(selectedMailbox)
+    }
   }, [selectedMailbox, syncSelectedMailbox])
 
   React.useEffect(() => {
@@ -783,7 +830,7 @@ function MailMessageBody({ message }: { message: MailMessage }) {
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-5">
-      <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-7 text-card-foreground">
+      <pre className="whitespace-pre-wrap wrap-break-word font-sans text-sm leading-7 text-card-foreground">
         {message.bodyText ?? message.body}
       </pre>
     </div>

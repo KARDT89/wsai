@@ -7,7 +7,8 @@ import {
   getCorsairRedirectUri,
   isKnownCorsairPlugin,
 } from "@/lib/corsair/server"
-import { syncCorsairPlugin } from "@/lib/corsair/sync"
+import { isSyncableCorsairPlugin } from "@/lib/corsair/sync"
+import { enqueueCorsairSync } from "@/inngest/events"
 
 export async function GET(request: NextRequest) {
   const error = request.nextUrl.searchParams.get("error")
@@ -36,27 +37,17 @@ export async function GET(request: NextRequest) {
 
     await ensureCorsairSetup(result.tenantId)
 
-    let syncError: string | null = null
-
-    if (isKnownCorsairPlugin(result.plugin)) {
-      try {
-        await syncCorsairPlugin(result.tenantId, result.plugin)
-      } catch (error) {
-        syncError =
-          error instanceof Error ? error.message : "Initial sync did not complete."
-      }
+    if (isKnownCorsairPlugin(result.plugin) && isSyncableCorsairPlugin(result.plugin)) {
+      await enqueueCorsairSync({
+        tenantId: result.tenantId,
+        plugin: result.plugin,
+        reason: "oauth_callback",
+      })
     }
 
-    const redirectUrl = new URL(
-      `/integrations?connected=${result.plugin}`,
-      request.url
+    return NextResponse.redirect(
+      new URL(`/integrations?connected=${result.plugin}`, request.url)
     )
-
-    if (syncError) {
-      redirectUrl.searchParams.set("sync_error", syncError)
-    }
-
-    return NextResponse.redirect(redirectUrl)
   } catch (callbackError) {
     const message = encodeURIComponent(
       callbackError instanceof Error
