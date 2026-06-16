@@ -8,7 +8,9 @@ import {
   AiChat01Icon,
   ArrowUp01Icon,
   Attachment01Icon,
+  BoltIcon,
   Cancel01Icon,
+  CheckmarkCircle01Icon,
   CommandIcon,
   Delete02Icon,
   Edit02Icon,
@@ -17,10 +19,9 @@ import {
 import { toast } from "sonner"
 
 import { AVAILABLE_MODELS, DEFAULT_MODEL } from "@/lib/agent-models"
-import type { ModelId } from "@/lib/agent-models"
+import type { AgentStreamEvent, ModelId, Step } from "@/lib/agent-models"
 import { useAiContext } from "@/lib/ai-context"
 import type { MailThread } from "@/lib/workspace-types"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
@@ -30,39 +31,24 @@ type ChatMessage = {
   id: string
   role: "user" | "assistant"
   content: string
+  steps?: Step[]
 }
 
-type Conversation = {
+type AgentSession = {
   id: string
   title: string
   model: ModelId
   messages: ChatMessage[]
   createdAt: string
+  updatedAt: string
 }
 
-const STORAGE_KEY = "wsai-agent-conversations"
-const MAX_CONVERSATIONS = 30
-
-function loadConversations(): Conversation[] {
-  if (typeof window === "undefined") return []
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as Conversation[]) : []
-  } catch {
-    return []
-  }
-}
-
-function saveConversations(convs: Conversation[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(convs.slice(0, MAX_CONVERSATIONS)))
-  } catch {
-    // storage full
-  }
-}
-
-function makeId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+type SessionListItem = {
+  id: string
+  title: string
+  model: string
+  createdAt: string
+  updatedAt: string
 }
 
 const SUGGESTIONS = [
@@ -74,8 +60,96 @@ const SUGGESTIONS = [
   "Search for emails with attachments",
 ]
 
+function ToolSteps({ steps, streaming }: { steps: Step[]; streaming: boolean }) {
+  const [expanded, setExpanded] = React.useState(false)
+  const hasRunning = steps.some((s) => !s.done)
+  const allDone = steps.length > 0 && steps.every((s) => s.done)
+
+  if (steps.length === 0) return null
+
+  if (allDone && !streaming && !expanded) {
+    return (
+      <button
+        type="button"
+        className="mb-3 flex items-center gap-1.5 rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-[11px] text-primary/70 transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
+        onClick={() => setExpanded(true)}
+      >
+        <HugeiconsIcon icon={BoltIcon} strokeWidth={2} className="size-3" />
+        {steps.length} operation{steps.length !== 1 ? "s" : ""} · show steps
+      </button>
+    )
+  }
+
+  if (expanded && allDone) {
+    return (
+      <div className="mb-4 overflow-hidden rounded-xl border border-border/50 bg-muted/30">
+        <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
+          <span className="flex items-center gap-1.5 text-[11px] font-medium text-foreground/60">
+            <HugeiconsIcon icon={BoltIcon} strokeWidth={2} className="size-3" />
+            Workflow trace
+          </span>
+          <button
+            type="button"
+            className="text-[11px] text-muted-foreground hover:text-foreground"
+            onClick={() => setExpanded(false)}
+          >
+            collapse
+          </button>
+        </div>
+        {steps.map((step) => (
+          <div key={step.id} className="flex items-center gap-2.5 px-3 py-1.5">
+            <HugeiconsIcon
+              icon={CheckmarkCircle01Icon}
+              strokeWidth={2}
+              className="size-3.5 shrink-0 text-emerald-500"
+            />
+            <span className="text-[11px] text-muted-foreground">{step.label}</span>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mb-4 overflow-hidden rounded-xl border border-primary/20 bg-linear-to-br from-primary/5 to-transparent">
+      <div className="flex items-center gap-2 border-b border-primary/10 px-3 py-2">
+        <div className="size-1.5 animate-pulse rounded-full bg-primary" />
+        <span className="text-[11px] font-medium text-primary/80">
+          {hasRunning ? "Working…" : "Completed"}
+        </span>
+      </div>
+      <div className="py-1">
+        {steps.map((step) => (
+          <div
+            key={step.id}
+            className="flex items-center gap-2.5 px-3 py-1.5 animate-in fade-in slide-in-from-left-2 duration-300"
+          >
+            {step.done ? (
+              <HugeiconsIcon
+                icon={CheckmarkCircle01Icon}
+                strokeWidth={2}
+                className="size-3.5 shrink-0 text-emerald-500"
+              />
+            ) : (
+              <div className="size-3.5 shrink-0 rounded-full border-2 border-primary/40 border-t-primary animate-spin" />
+            )}
+            <span className={cn("text-xs transition-colors", step.done ? "text-muted-foreground" : "text-foreground")}>
+              {step.label}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ThreadAvatar({ sender }: { sender: string }) {
-  const initials = sender.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()
+  const initials = sender
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
   const hue = Math.abs(sender.split("").reduce((a, c) => a + c.charCodeAt(0), 0) % 360)
   return (
     <div
@@ -89,42 +163,89 @@ function ThreadAvatar({ sender }: { sender: string }) {
 
 export default function AgentPage() {
   const { contextText, contextLabel, setAiContext, clearAiContext } = useAiContext()
-  const [conversations, setConversations] = React.useState<Conversation[]>([])
-  const [activeId, setActiveId] = React.useState<string | null>(null)
+
+  const [sessionList, setSessionList] = React.useState<SessionListItem[]>([])
+  const [activeSession, setActiveSession] = React.useState<AgentSession | null>(null)
+  const [sessionsLoaded, setSessionsLoaded] = React.useState(false)
+
   const [model, setModel] = React.useState<ModelId>(DEFAULT_MODEL)
   const [input, setInput] = React.useState("")
   const [streaming, setStreaming] = React.useState(false)
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const [threads, setThreads] = React.useState<MailThread[]>([])
   const [threadsLoading, setThreadsLoading] = React.useState(false)
-  const msgCounter = React.useRef(0)
-  const scrollRef = React.useRef<HTMLDivElement>(null)
-  const textareaRef = React.useRef<HTMLTextAreaElement>(null)
-  const activeIdRef = React.useRef<string | null>(null)
 
+  const msgCounter = React.useRef(0)
+  const scrollContainerRef = React.useRef<HTMLDivElement>(null)
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+  const activeSessionIdRef = React.useRef<string | null>(null)
+
+  // Load session list on mount
   React.useEffect(() => {
-    setConversations(loadConversations())
+    void loadSessionList()
   }, [])
 
-  const activeConversation = conversations.find((c) => c.id === activeId) ?? null
-  const messages = activeConversation?.messages ?? []
+  async function loadSessionList() {
+    try {
+      const res = await fetch("/api/agent/sessions")
+      const data = (await res.json()) as { sessions: SessionListItem[] }
+      setSessionList(data.sessions ?? [])
+    } catch {
+      // silent
+    } finally {
+      setSessionsLoaded(true)
+    }
+  }
+
+  async function loadSession(id: string) {
+    try {
+      const res = await fetch(`/api/agent/sessions/${id}`)
+      const data = (await res.json()) as { session: AgentSession }
+      const s = data.session
+      setActiveSession({
+        ...s,
+        messages: (s.messages as unknown as ChatMessage[]) ?? [],
+      })
+      activeSessionIdRef.current = s.id
+      setModel((s.model as ModelId) ?? DEFAULT_MODEL)
+    } catch {
+      toast.error("Failed to load conversation")
+    }
+  }
+
+  async function deleteSession(id: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    await fetch(`/api/agent/sessions/${id}`, { method: "DELETE" })
+    setSessionList((prev) => prev.filter((s) => s.id !== id))
+    if (activeSessionIdRef.current === id) {
+      setActiveSession(null)
+      activeSessionIdRef.current = null
+    }
+  }
+
+  function startNewChat() {
+    setActiveSession(null)
+    activeSessionIdRef.current = null
+    setInput("")
+    textareaRef.current?.focus()
+  }
+
+  const messages = activeSession?.messages ?? []
 
   const scrollToBottom = React.useCallback(() => {
-    setTimeout(() => {
-      scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
-    }, 50)
+    requestAnimationFrame(() => {
+      const viewport = scrollContainerRef.current?.querySelector(
+        "[data-radix-scroll-area-viewport]"
+      )
+      if (viewport) {
+        viewport.scrollTop = viewport.scrollHeight
+      }
+    })
   }, [])
 
   React.useEffect(() => {
     scrollToBottom()
   }, [messages.length, scrollToBottom])
-
-  function startNewChat() {
-    setActiveId(null)
-    activeIdRef.current = null
-    setInput("")
-    textareaRef.current?.focus()
-  }
 
   async function fetchThreads() {
     if (threads.length > 0) return
@@ -156,69 +277,78 @@ export default function AgentPage() {
     setPickerOpen(false)
   }
 
-  function deleteConversation(id: string, e: React.MouseEvent) {
-    e.stopPropagation()
-    setConversations((prev) => {
-      const updated = prev.filter((c) => c.id !== id)
-      saveConversations(updated)
-      return updated
-    })
-    if (activeId === id) {
-      setActiveId(null)
-      activeIdRef.current = null
-    }
-  }
-
   async function handleSend(overrideInput?: string) {
     const text = (overrideInput ?? input).trim()
     if (!text || streaming) return
 
     setInput("")
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "24px"
-    }
+    if (textareaRef.current) textareaRef.current.style.height = "24px"
 
     const userId = `u-${++msgCounter.current}`
     const assistantId = `a-${++msgCounter.current}`
 
     const userMsg: ChatMessage = { id: userId, role: "user", content: text }
-    const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "" }
+    const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", steps: [] }
 
-    // determine or create conversation
-    let conversationId = activeIdRef.current
+    let sessionId = activeSessionIdRef.current
     let usedModel = model
+    let isNewSession = false
 
-    if (!conversationId) {
-      conversationId = makeId()
-      activeIdRef.current = conversationId
-      setActiveId(conversationId)
-
-      const newConv: Conversation = {
-        id: conversationId,
-        title: text.slice(0, 60),
-        model,
-        messages: [userMsg, assistantMsg],
-        createdAt: new Date().toISOString(),
+    if (!sessionId) {
+      // Create new session in DB
+      isNewSession = true
+      usedModel = model
+      try {
+        const res = await fetch("/api/agent/sessions", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            title: text.slice(0, 60),
+            model,
+            messages: [userMsg, assistantMsg],
+          }),
+        })
+        const data = (await res.json()) as { session: { id: string; title: string; model: string; createdAt: string; updatedAt: string } }
+        sessionId = data.session.id
+        activeSessionIdRef.current = sessionId
+        setActiveSession({
+          id: sessionId,
+          title: text.slice(0, 60),
+          model,
+          messages: [userMsg, assistantMsg],
+          createdAt: data.session.createdAt,
+          updatedAt: data.session.updatedAt,
+        })
+        setSessionList((prev) => [
+          { id: sessionId!, title: text.slice(0, 60), model, createdAt: data.session.createdAt, updatedAt: data.session.updatedAt },
+          ...prev,
+        ])
+      } catch {
+        toast.error("Failed to create conversation")
+        return
       }
-      setConversations((prev) => {
-        const updated = [newConv, ...prev]
-        saveConversations(updated)
-        return updated
-      })
     } else {
-      usedModel = activeConversation?.model ?? model
-      setConversations((prev) => {
-        const updated = prev.map((c) =>
-          c.id === conversationId
-            ? { ...c, messages: [...c.messages, userMsg, assistantMsg] }
-            : c
-        )
-        saveConversations(updated)
-        return updated
+      usedModel = activeSession?.model ?? model
+      setActiveSession((prev) => {
+        if (!prev) return prev
+        return { ...prev, messages: [...prev.messages, userMsg, assistantMsg] }
       })
     }
 
     setStreaming(true)
+
+    // Mutable reference to accumulate messages during streaming
+    let currentMessages: ChatMessage[] = isNewSession
+      ? [userMsg, assistantMsg]
+      : [...(activeSession?.messages ?? []), userMsg, assistantMsg]
+
+    function updateMsg(fn: (m: ChatMessage) => ChatMessage) {
+      currentMessages = currentMessages.map((m) => (m.id === assistantId ? fn(m) : m))
+      setActiveSession((prev) => {
+        if (!prev) return prev
+        return { ...prev, messages: currentMessages }
+      })
+    }
 
     try {
       const fullPrompt = contextText
@@ -238,48 +368,54 @@ export default function AgentPage() {
 
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
+      let buffer = ""
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        const chunk = decoder.decode(value, { stream: true })
-        setConversations((prev) => {
-          const updated = prev.map((c) =>
-            c.id === conversationId
-              ? {
-                  ...c,
-                  messages: c.messages.map((m) =>
-                    m.id === assistantId ? { ...m, content: m.content + chunk } : m
-                  ),
-                }
-              : c
-          )
-          saveConversations(updated)
-          return updated
-        })
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const event = JSON.parse(line) as AgentStreamEvent
+            if (event.type === "tool_start") {
+              updateMsg((m) => ({
+                ...m,
+                steps: [...(m.steps ?? []), { id: event.id, label: event.label, done: false }],
+              }))
+            } else if (event.type === "tool_done") {
+              updateMsg((m) => ({
+                ...m,
+                steps: (m.steps ?? []).map((s) => (s.id === event.id ? { ...s, done: true } : s)),
+              }))
+            } else if (event.type === "text") {
+              updateMsg((m) => ({ ...m, content: m.content + event.delta }))
+            }
+          } catch {
+            // skip malformed line
+          }
+        }
+        scrollToBottom()
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Something went wrong")
-      setConversations((prev) => {
-        const updated = prev.map((c) =>
-          c.id === conversationId
-            ? {
-                ...c,
-                messages: c.messages.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, content: "Something went wrong. Please try again." }
-                    : m
-                ),
-              }
-            : c
-        )
-        saveConversations(updated)
-        return updated
-      })
+      updateMsg((m) => ({ ...m, content: "Something went wrong. Please try again." }))
     } finally {
       setStreaming(false)
       scrollToBottom()
       textareaRef.current?.focus()
+
+      // Persist final messages to DB
+      if (sessionId) {
+        void fetch(`/api/agent/sessions/${sessionId}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ messages: currentMessages }),
+        })
+      }
     }
   }
 
@@ -313,29 +449,34 @@ export default function AgentPage() {
 
         <ScrollArea className="flex-1">
           <div className="space-y-0.5 p-2">
-            {conversations.length === 0 ? (
+            {!sessionsLoaded ? (
+              <div className="flex items-center justify-center py-8">
+                <HugeiconsIcon
+                  icon={RefreshIcon}
+                  strokeWidth={2}
+                  className="size-4 animate-spin text-muted-foreground"
+                />
+              </div>
+            ) : sessionList.length === 0 ? (
               <p className="px-2 py-8 text-center text-xs text-muted-foreground">
                 No conversations yet
               </p>
             ) : (
-              conversations.map((conv) => (
+              sessionList.map((s) => (
                 <button
-                  key={conv.id}
+                  key={s.id}
                   type="button"
                   className={cn(
                     "group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted",
-                    activeId === conv.id && "bg-muted font-medium"
+                    activeSession?.id === s.id && "bg-muted font-medium"
                   )}
-                  onClick={() => {
-                    setActiveId(conv.id)
-                    activeIdRef.current = conv.id
-                  }}
+                  onClick={() => void loadSession(s.id)}
                 >
-                  <span className="flex-1 truncate">{conv.title}</span>
+                  <span className="flex-1 truncate">{s.title}</span>
                   <button
                     type="button"
                     className="shrink-0 opacity-0 transition-opacity group-hover:opacity-50 hover:opacity-100!"
-                    onClick={(e) => deleteConversation(conv.id, e)}
+                    onClick={(e) => void deleteSession(s.id, e)}
                   >
                     <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-3.5" />
                     <span className="sr-only">Delete</span>
@@ -375,7 +516,8 @@ export default function AgentPage() {
             </div>
             <h1 className="mt-5 text-2xl font-semibold tracking-tight">wsai agent</h1>
             <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
-              Your AI-powered workspace assistant. Ask me to search emails, summarize threads, draft replies, or manage your calendar.
+              Your AI-powered workspace assistant. Ask me to search emails, summarize threads,
+              draft replies, or manage your calendar.
             </p>
 
             <div className="mt-8 grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
@@ -392,54 +534,87 @@ export default function AgentPage() {
             </div>
           </div>
         ) : (
-          <ScrollArea className="flex-1">
-            <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
-              {messages.map((msg, index) => (
-                <div
-                  key={msg.id}
-                  className={cn("flex gap-3", msg.role === "user" && "justify-end")}
-                >
-                  {msg.role === "assistant" ? (
-                    <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary ring-1 ring-primary/20">
-                      <HugeiconsIcon icon={CommandIcon} strokeWidth={2} className="size-3.5" />
-                    </div>
-                  ) : null}
+          <div ref={scrollContainerRef} className="flex-1 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
+                {messages.map((msg, index) => {
+                  const isLast = index === messages.length - 1
+                  const isLastStreaming = isLast && streaming
+                  const isUser = msg.role === "user"
+                  const hasSteps = (msg.steps?.length ?? 0) > 0
+                  const hasContent = Boolean(msg.content)
+                  const showDots = !isUser && !hasContent && !hasSteps && isLastStreaming
+                  const showBubble = isUser || hasContent || showDots
 
-                  <div
-                    className={cn(
-                      "max-w-[80%] rounded-2xl px-4 py-3 text-sm",
-                      msg.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-foreground"
-                    )}
-                  >
-                    {msg.content === "" && streaming && index === messages.length - 1 ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:0ms]" />
-                        <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:150ms]" />
-                        <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
-                      </span>
-                    ) : msg.role === "assistant" ? (
-                      <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {msg.content}
-                        </ReactMarkdown>
+                  return (
+                    <div
+                      key={msg.id}
+                      className={cn(
+                        "flex items-start gap-3",
+                        isUser && "flex-row-reverse"
+                      )}
+                    >
+                      {/* Avatar */}
+                      {isUser ? (
+                        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px] font-semibold">
+                          U
+                        </div>
+                      ) : (
+                        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 ring-1 ring-primary/20">
+                          <HugeiconsIcon
+                            icon={CommandIcon}
+                            strokeWidth={2}
+                            className="size-3.5 text-primary"
+                          />
+                        </div>
+                      )}
+
+                      {/* Content column */}
+                      <div
+                        className={cn(
+                          "flex min-w-0 max-w-[80%] flex-col",
+                          isUser && "items-end"
+                        )}
+                      >
+                        {/* Tool steps (assistant only) */}
+                        {hasSteps ? (
+                          <ToolSteps steps={msg.steps!} streaming={isLastStreaming} />
+                        ) : null}
+
+                        {/* Message bubble */}
+                        {showBubble ? (
+                          <div
+                            className={cn(
+                              "rounded-2xl px-4 py-3 text-sm shadow-sm",
+                              isUser
+                                ? "rounded-tr-sm bg-linear-to-br from-primary to-primary/80 text-primary-foreground"
+                                : "rounded-tl-sm bg-muted/60 text-foreground ring-1 ring-border/50"
+                            )}
+                          >
+                            {showDots ? (
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="size-1.5 animate-bounce rounded-full bg-current opacity-60 [animation-delay:0ms]" />
+                                <span className="size-1.5 animate-bounce rounded-full bg-current opacity-60 [animation-delay:150ms]" />
+                                <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
+                              </span>
+                            ) : isUser ? (
+                              <p className="whitespace-pre-wrap">{msg.content}</p>
+                            ) : (
+                              <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                  {msg.content}
+                                </ReactMarkdown>
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
                       </div>
-                    ) : (
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
-                    )}
-                  </div>
-
-                  {msg.role === "user" ? (
-                    <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-semibold ring-1 ring-primary/30">
-                      U
                     </div>
-                  ) : null}
-                </div>
-              ))}
-              <div ref={scrollRef} />
-            </div>
-          </ScrollArea>
+                  )
+                })}
+              </div>
+            </ScrollArea>
+          </div>
         )}
 
         {/* Thread picker backdrop */}
@@ -465,10 +640,16 @@ export default function AgentPage() {
               <div className="max-h-72 overflow-y-auto">
                 {threadsLoading ? (
                   <div className="flex items-center justify-center py-8">
-                    <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} className="size-4 animate-spin text-muted-foreground" />
+                    <HugeiconsIcon
+                      icon={RefreshIcon}
+                      strokeWidth={2}
+                      className="size-4 animate-spin text-muted-foreground"
+                    />
                   </div>
                 ) : threads.length === 0 ? (
-                  <p className="px-4 py-6 text-center text-xs text-muted-foreground">No threads found</p>
+                  <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+                    No threads found
+                  </p>
                 ) : (
                   threads.map((t) => (
                     <button
@@ -482,7 +663,9 @@ export default function AgentPage() {
                         <p className="truncate text-xs font-medium">{t.subject}</p>
                         <p className="truncate text-[11px] text-muted-foreground">{t.snippet}</p>
                       </div>
-                      {t.unread ? <div className="size-1.5 shrink-0 rounded-full bg-primary" /> : null}
+                      {t.unread ? (
+                        <div className="size-1.5 shrink-0 rounded-full bg-primary" />
+                      ) : null}
                     </button>
                   ))
                 )}
@@ -494,8 +677,14 @@ export default function AgentPage() {
             {contextLabel ? (
               <div className="mb-2.5 flex items-center gap-2">
                 <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2">
-                  <HugeiconsIcon icon={Attachment01Icon} strokeWidth={2} className="size-3.5 shrink-0 text-primary" />
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-primary">{contextLabel}</span>
+                  <HugeiconsIcon
+                    icon={Attachment01Icon}
+                    strokeWidth={2}
+                    className="size-3.5 shrink-0 text-primary"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-primary">
+                    {contextLabel}
+                  </span>
                   <button
                     type="button"
                     onClick={clearAiContext}
@@ -559,9 +748,9 @@ export default function AgentPage() {
 
             <div className="mt-2 flex items-center justify-between px-1">
               <span className="text-xs text-muted-foreground">
-                {activeConversation
-                  ? AVAILABLE_MODELS.find((m) => m.id === activeConversation.model)?.label ??
-                    activeConversation.model
+                {activeSession
+                  ? AVAILABLE_MODELS.find((m) => m.id === activeSession.model)?.label ??
+                    activeSession.model
                   : AVAILABLE_MODELS.find((m) => m.id === model)?.label ?? model}
               </span>
               {messages.length > 0 ? (

@@ -1,10 +1,14 @@
+export type Step = { id: string; label: string; done: boolean }
+
+export type AgentStreamEvent =
+  | { type: "tool_start"; id: string; label: string }
+  | { type: "tool_done"; id: string }
+  | { type: "text"; delta: string }
+
 export const AVAILABLE_MODELS = [
-  { id: "anthropic/claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
-  { id: "anthropic/claude-haiku-4-5", label: "Claude Haiku 4.5" },
   { id: "openai/gpt-4o", label: "GPT-4o" },
-  { id: "openai/gpt-4.1", label: "GPT-4.1" },
-  { id: "google/gemini-2.0-flash-001", label: "Gemini 2.0 Flash" },
+  { id: "openai/gpt-4o-mini", label: "GPT-4o Mini" },
 ] as const
 
 export type ModelId = (typeof AVAILABLE_MODELS)[number]["id"]
-export const DEFAULT_MODEL: ModelId = "anthropic/claude-sonnet-4-5"
+export const DEFAULT_MODEL: ModelId = "openai/gpt-4o"

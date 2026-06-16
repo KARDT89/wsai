@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server"
 
-import { streamWsaiAgent } from "@/server/agent/run-agent"
+import { prisma } from "@/lib/db"
 import { getCurrentSession } from "@/lib/session"
+import { streamWsaiAgentEvents } from "@/server/agent/run-agent"
 
 export const runtime = "nodejs"
 export const maxDuration = 60
@@ -20,23 +21,38 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Prompt is required" }, { status: 400 })
   }
 
+  // Load user's custom API key (single DB read, cached at the row level by Prisma)
+  const userSettings = await prisma.userSettings.findUnique({
+    where: { userId: session.user.id },
+    select: { apiKey: true, apiKeyProvider: true },
+  })
+
   const fullPrompt = context
     ? `Context:\n${context}\n\nUser message:\n${prompt}`
     : prompt
 
   try {
-    const result = await streamWsaiAgent(session.user.id, fullPrompt, model)
-    const nodeStream = result.toTextStream({ compatibleWithNodeStreams: true })
+    const eventStream = streamWsaiAgentEvents(
+      session.user.id,
+      fullPrompt,
+      model,
+      userSettings ?? undefined
+    )
     const encoder = new TextEncoder()
 
     const responseStream = new ReadableStream({
       async start(controller) {
         try {
-          for await (const chunk of nodeStream) {
-            controller.enqueue(
-              encoder.encode(typeof chunk === "string" ? chunk : String(chunk))
-            )
+          for await (const event of eventStream) {
+            controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"))
           }
+        } catch (err) {
+          // Stream an error event so the client shows something meaningful
+          const errorEvent = {
+            type: "text",
+            delta: `\n\n_Error: ${err instanceof Error ? err.message : "Agent failed"}_`,
+          }
+          controller.enqueue(encoder.encode(JSON.stringify(errorEvent) + "\n"))
         } finally {
           controller.close()
         }
@@ -45,9 +61,10 @@ export async function POST(req: Request) {
 
     return new Response(responseStream, {
       headers: {
-        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Type": "application/x-ndjson; charset=utf-8",
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "no-cache",
+        "Transfer-Encoding": "chunked",
       },
     })
   } catch (error) {

@@ -1,84 +1,180 @@
 import { OpenAIAgentsProvider } from "@corsair-dev/mcp"
-import { Agent, OpenAIProvider, run, setDefaultModelProvider, tool } from "@openai/agents"
+import { Agent, OpenAIProvider, Runner, tool } from "@openai/agents"
 
 import { getCorsairInstance } from "@/lib/corsair/server"
 import { DEFAULT_MODEL } from "@/lib/agent-models"
 
+// Register all plugins (side-effect imports)
+import "./plugins/gmail"
+import "./plugins/googlecalendar"
+
+import { buildPluginSystemPrompt, labelFromPlugins } from "./plugins/index"
+
 export { AVAILABLE_MODELS, DEFAULT_MODEL } from "@/lib/agent-models"
 export type { ModelId } from "@/lib/agent-models"
 
-// Point at OpenRouter when the key is present; otherwise the SDK picks up OPENAI_API_KEY.
-if (process.env.OPENROUTER_API_KEY) {
-  setDefaultModelProvider(
-    new OpenAIProvider({
-      apiKey: process.env.OPENROUTER_API_KEY,
-      baseURL: "https://openrouter.ai/api/v1",
-    })
-  )
+const PROVIDER_BASE_URLS: Record<string, string> = {
+  openrouter: "https://openrouter.ai/api/v1",
+  openai: "https://api.openai.com/v1",
+  anthropic: "https://api.anthropic.com/v1",
 }
 
-const SYSTEM_PROMPT = `
-You are the WSAI workspace assistant. You help users read, search, summarize, reply, and manage their Gmail and Google Calendar — all from one workspace.
+function buildProvider(opts?: { apiKey?: string | null; provider?: string | null }) {
+  const userKey = opts?.apiKey?.trim()
+  const userProvider = opts?.provider?.trim() ?? "openrouter"
 
-You have access to the user's Gmail and Google Calendar through Corsair MCP tools.
+  if (userKey) {
+    return new OpenAIProvider({
+      apiKey: userKey,
+      baseURL: PROVIDER_BASE_URLS[userProvider] ?? PROVIDER_BASE_URLS.openrouter,
+    })
+  }
 
-## How to use Corsair tools
+  if (process.env.OPENROUTER_API_KEY) {
+    return new OpenAIProvider({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: PROVIDER_BASE_URLS.openrouter,
+    })
+  }
 
-Always follow this pattern:
-1. Call list_operations to discover available APIs for the plugin (gmail or googlecalendar).
-2. Call get_schema on the specific operation you want to use to understand required parameters.
-3. Call run_script to execute the operation.
+  return undefined
+}
 
-## Gmail capabilities (24 operations)
+// ─── Stream event types ─────────────────────────────────────────────────────
 
-Messages: list, get, send, delete, modify (add/remove labels), batchModify, trash, untrash
-Labels:   list, get, create, update, delete
-Drafts:   list, get, create, update, delete, send
-Threads:  list, get, modify (add/remove labels), delete, trash, untrash
-Users:    getProfile (returns the user's email address)
+export type AgentStreamEvent =
+  | { type: "tool_start"; id: string; label: string }
+  | { type: "tool_done"; id: string }
+  | { type: "text"; delta: string }
 
-Useful Gmail patterns:
-- To search inbox: messages.list with a query string (supports Gmail search syntax: from:, to:, subject:, is:unread, has:attachment, after:, before:, label:)
-- To read a thread: threads.get with format=full to get all messages and their bodies
-- To send a reply: messages.send with raw RFC 2822 message (include In-Reply-To and References headers)
-- To archive: threads.modify with removeLabelIds: ["INBOX"]
-- To star: threads.modify with addLabelIds: ["STARRED"]
-- To mark read: messages.modify with removeLabelIds: ["UNREAD"]
+// ─── Tool label helpers ─────────────────────────────────────────────────────
 
-## Google Calendar capabilities (6 operations)
+function labelForToolCall(name: string, rawArgs: string): string {
+  let args: Record<string, unknown> = {}
+  try {
+    args = JSON.parse(rawArgs) as Record<string, unknown>
+  } catch {
+    // unparseable — use defaults
+  }
 
-Events: create, get, getMany (list with time range), update, delete
-Calendar: getAvailability (check free/busy slots for scheduling)
+  switch (name) {
+    case "corsair_setup":
+      return "Connecting to workspace"
+    case "list_operations": {
+      const plugin = typeof args.plugin === "string" ? args.plugin : ""
+      return plugin ? `Discovering ${plugin} operations` : "Discovering operations"
+    }
+    case "get_schema": {
+      const path = typeof args.path === "string" ? args.path : ""
+      return path ? `Reading schema: ${path}` : "Reading API schema"
+    }
+    case "run_script": {
+      const code = typeof args.code === "string" ? args.code : ""
+      return labelFromPlugins(code) ?? "Running operation"
+    }
+    default:
+      return name.replace(/_/g, " ")
+  }
+}
 
-Useful Calendar patterns:
-- To list upcoming events: events.getMany with timeMin (now) and timeMax (e.g. 7 days ahead)
-- To find a free slot: calendar.getAvailability with a list of attendees and a time range
-- To create an event: events.create with summary, start, end, attendees, and optional conferenceData for a Meet link
+// ─── System prompt ──────────────────────────────────────────────────────────
+
+function buildSystemPrompt(): string {
+  return `
+You are the WSAI workspace assistant. You help users manage their Gmail and Google Calendar.
+
+## Tool usage
+
+Call run_script directly. Do NOT call corsair_setup, list_operations, or get_schema.
+
+If run_script returns an error containing "unauthorized", "no token", "not connected", or similar, tell the user that integration needs to be connected at /integrations and stop.
+
+All operation syntax is documented below.
+
+${buildPluginSystemPrompt()}
 
 ## Behavioural rules
 
-- For read operations (summarize, search, list): proceed directly and show results.
-- For write operations (send, delete, trash, create event, modify labels): explain what you are about to do, then do it. Do not ask for permission twice.
-- When summarizing a thread, be concise: state who sent it, what they are asking, and what action (if any) is needed.
-- When drafting a reply, match the tone of the thread. Output the draft as plain text so the user can review it.
-- When you cannot complete a task because credentials are missing or the operation does not exist, say so clearly and suggest what the user should check.
-`.trim()
+AUTONOMY: Never ask the user for clarification, confirmation, or more information. If the user asks you to do something, do it immediately using your best judgment.
 
-export async function streamWsaiAgent(
+- Read/search: execute immediately, no preamble.
+- Send email: compose the full email yourself (subject, body, tone). Send it. Do not ask what to write.
+- Draft reply: read the thread first, compose a reply that fits the conversation context.
+- Create event: pick reasonable defaults for duration if not specified. Create it.
+- Write operations (send, delete, create event): say what you did in one sentence after completing.
+- Summarise threads: use the snippet from threads.list. Do NOT call threads.get for each thread — that explodes token usage.
+- Only call threads.get (format: "full") when the user asks to open or read a specific single email.
+- Limit threads.list and messages.list to maxResults: 10 unless asked for more.
+- If a tool call returns an error, report the exact error in one sentence. Do not retry.
+`.trim()
+}
+
+// ─── Streaming ──────────────────────────────────────────────────────────────
+
+export type AgentProviderOpts = {
+  apiKey?: string | null
+  apiKeyProvider?: string | null
+}
+
+export async function* streamWsaiAgentEvents(
   tenantId: string,
   prompt: string,
-  model: string = DEFAULT_MODEL
-) {
+  model: string = DEFAULT_MODEL,
+  providerOpts?: AgentProviderOpts
+): AsyncGenerator<AgentStreamEvent> {
   const corsair = getCorsairInstance().withTenant(tenantId)
   const provider = new OpenAIAgentsProvider()
-  const tools = provider.build({ corsair, tool })
+  const tools = provider.build({ corsair, tool, tenantId })
+
+  const modelProvider = buildProvider({
+    apiKey: providerOpts?.apiKey,
+    provider: providerOpts?.apiKeyProvider,
+  })
 
   const agent = new Agent({
     name: "wsai-agent",
     model,
-    instructions: SYSTEM_PROMPT,
+    instructions: buildSystemPrompt(),
     tools,
   })
 
-  return run(agent, prompt, { stream: true })
+  const runner = new Runner(modelProvider ? { modelProvider } : undefined)
+  const result = await runner.run(agent, prompt, { stream: true })
+
+  let toolIndex = 0
+  const callIdToId = new Map<string, string>()
+
+  for await (const event of result) {
+    if (event.type === "run_item_stream_event") {
+      if (event.name === "tool_called") {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const item = event.item as any
+        const toolName: string = item.toolName ?? "unknown"
+        const callId: string = item.callId ?? String(toolIndex)
+        const rawArgs: string =
+          typeof item.rawItem?.arguments === "string"
+            ? item.rawItem.arguments
+            : typeof item.rawItem?.input === "string"
+              ? item.rawItem.input
+              : "{}"
+        const id = `t${++toolIndex}`
+        callIdToId.set(callId, id)
+        yield { type: "tool_start", id, label: labelForToolCall(toolName, rawArgs) }
+      } else if (event.name === "tool_output") {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const item = event.item as any
+        const callId: string = item.callId ?? ""
+        const id = callIdToId.get(callId) ?? `t${toolIndex}`
+        yield { type: "tool_done", id }
+      }
+    } else if (
+      event.type === "raw_model_stream_event" &&
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (event.data as any).type === "output_text_delta"
+    ) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const delta: string = (event.data as any).delta ?? ""
+      if (delta) yield { type: "text", delta }
+    }
+  }
 }

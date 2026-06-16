@@ -35,7 +35,10 @@ const googleCalendarPlugin = withOAuthScopes(
       },
     },
   }),
-  ["https://www.googleapis.com/auth/calendar.readonly"]
+  [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
+  ]
 )
 
 export const corsairPlugins = [gmailPlugin, googleCalendarPlugin] as const
@@ -45,7 +48,10 @@ export type CorsairPluginId = (typeof corsairPlugins)[number]["id"]
 export const primaryIntegrationIds = ["gmail", "googlecalendar"] as const
 
 export function getAppUrl() {
+  // CORSAIR_WEBHOOK_URL is specifically for Corsair's webhook registration and
+  // OAuth redirect URI. Use this for ngrok in local dev without breaking auth.
   return (
+    process.env.CORSAIR_WEBHOOK_URL ??
     process.env.NEXT_PUBLIC_APP_URL ??
     process.env.BETTER_AUTH_URL ??
     process.env.APP_URL ??
