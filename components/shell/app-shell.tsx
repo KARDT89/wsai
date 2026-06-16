@@ -9,13 +9,16 @@ import {
   CalendarDaysIcon,
   CommandIcon,
   Database01Icon,
+  Logout01Icon,
   Mail01Icon,
+  MoreVerticalCircle01Icon,
   SearchIcon,
   Settings05Icon,
   Shield01Icon,
   UserCircle02Icon,
 } from "@hugeicons/core-free-icons"
 
+import { authClient } from "@/lib/auth-client"
 import { ModeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
 import {
@@ -28,6 +31,14 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -80,6 +91,7 @@ export function AppShell({ children, user }: AppShellProps) {
   const router = useRouter()
   const [commandOpen, setCommandOpen] = React.useState(false)
   const [aiOpen, setAiOpen] = React.useState(false)
+  const [isSigningOut, setIsSigningOut] = React.useState(false)
 
   React.useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -97,6 +109,13 @@ export function AppShell({ children, user }: AppShellProps) {
     navItems.find((item) => pathname.startsWith(item.href)) ?? navItems[0]
   const sectionName = sectionLabels[activeItem.href] ?? "Mail"
   const actionLabel = actionLabels[activeItem.href] ?? "Compose"
+
+  async function handleSignOut() {
+    setIsSigningOut(true)
+    await authClient.signOut()
+    router.push("/login")
+    router.refresh()
+  }
 
   return (
     <div className="flex min-h-svh bg-background text-foreground">
@@ -151,15 +170,59 @@ export function AppShell({ children, user }: AppShellProps) {
             <HugeiconsIcon icon={AiMail01Icon} strokeWidth={2} className="size-4" />
             AI drawer
           </Button>
-          <div className="mt-2 flex items-center gap-2 rounded-md px-2 py-2 text-sm">
-            <HugeiconsIcon icon={UserCircle02Icon} strokeWidth={2} className="size-4 text-muted-foreground" />
-            <div className="min-w-0">
-              <p className="truncate font-medium">{user.name ?? "Workspace"}</p>
-              <p className="truncate text-xs text-muted-foreground">
-                {user.email}
-              </p>
-            </div>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                className="mt-2 h-auto w-full justify-start gap-2 rounded-md px-2 py-2"
+              >
+                <HugeiconsIcon
+                  icon={UserCircle02Icon}
+                  strokeWidth={2}
+                  className="size-4 text-muted-foreground"
+                />
+                <div className="min-w-0 flex-1 text-left">
+                  <p className="truncate text-sm font-medium">
+                    {user.name ?? "Workspace"}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {user.email}
+                  </p>
+                </div>
+                <HugeiconsIcon
+                  icon={MoreVerticalCircle01Icon}
+                  strokeWidth={2}
+                  className="size-4 text-muted-foreground"
+                />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="right" align="end" className="min-w-56">
+              <DropdownMenuLabel>
+                <span className="block truncate text-foreground">
+                  {user.name ?? "Workspace"}
+                </span>
+                <span className="block truncate font-normal">{user.email}</span>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => router.push("/settings")}>
+                <HugeiconsIcon icon={Settings05Icon} strokeWidth={2} />
+                Settings
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={isSigningOut}
+                onSelect={(event) => {
+                  event.preventDefault()
+                  void handleSignOut()
+                }}
+              >
+                <HugeiconsIcon icon={Logout01Icon} strokeWidth={2} />
+                {isSigningOut ? "Logging out..." : "Log out"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </aside>
 
