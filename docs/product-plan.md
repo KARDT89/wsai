@@ -468,6 +468,3 @@ INNGEST_SIGNING_KEY=
 
 ---
 
-## UI Aesthetic
-
-Dense command center. Black base, electric blue (`#00BFFF`) accents, red for urgency signals. Monospaced data, thin dividers, no gradients or cards on the cockpit surface. The triage cockpit is the first thing the user sees — it should look like a terminal that respects their time, not a SaaS marketing page.

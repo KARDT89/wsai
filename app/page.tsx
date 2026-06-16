@@ -18,7 +18,7 @@ export default async function Home() {
       <section className="mx-auto flex min-h-svh w-full max-w-6xl flex-col px-6 py-6">
         <header className="flex items-center justify-between">
           <Link href="/" className="text-sm font-semibold">
-            Founder Command Center
+            wsai
           </Link>
           <nav className="flex items-center gap-2">
             {session ? (
@@ -44,12 +44,12 @@ export default async function Home() {
               Gmail and Google Calendar triage for founders
             </p>
             <h1 className="text-4xl font-semibold leading-tight tracking-normal sm:text-6xl">
-              Founder Command Center
+              wsai
             </h1>
             <p className="mt-6 max-w-xl text-lg leading-8 text-muted-foreground">
-              A fast operating cockpit for the inbox, calendar, approvals, and
-              agent work that decide your day. Integrations run through Corsair,
-              with your Better Auth user ID as the tenant ID.
+              Workspace AI is a fast operating cockpit for the inbox, calendar,
+              approvals, and agent work that decide your day. Integrations run
+              through Corsair, with your Better Auth user ID as the tenant ID.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Button asChild size="lg">

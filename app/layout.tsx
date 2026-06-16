@@ -18,8 +18,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Founder Command Center",
-  description: "A founder cockpit for Gmail, calendar, and approval triage.",
+  title: "wsai",
+  description: "Workspace AI for Gmail, calendar, and approval triage.",
 };
 
 export default function RootLayout({
