@@ -219,7 +219,7 @@ function Detail({
         strokeWidth={2}
         className="mt-0.5 size-4 shrink-0 text-muted-foreground"
       />
-      <span className="min-w-0 break-words">{children}</span>
+      <span className="min-w-0 wrap-break-word">{children}</span>
     </div>
   )
 }

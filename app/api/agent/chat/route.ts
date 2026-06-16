@@ -13,8 +13,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const body = (await req.json()) as { prompt?: string; context?: string }
-  const { prompt, context } = body
+  const body = (await req.json()) as { prompt?: string; context?: string; model?: string }
+  const { prompt, context, model } = body
 
   if (!prompt?.trim()) {
     return NextResponse.json({ error: "Prompt is required" }, { status: 400 })
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
     : prompt
 
   try {
-    const result = await streamWsaiAgent(session.user.id, fullPrompt)
+    const result = await streamWsaiAgent(session.user.id, fullPrompt, model)
     const nodeStream = result.toTextStream({ compatibleWithNodeStreams: true })
     const encoder = new TextEncoder()
 

@@ -1,7 +1,21 @@
 import { OpenAIAgentsProvider } from "@corsair-dev/mcp"
-import { Agent, run, tool } from "@openai/agents"
+import { Agent, OpenAIProvider, run, setDefaultModelProvider, tool } from "@openai/agents"
 
 import { getCorsairInstance } from "@/lib/corsair/server"
+import { DEFAULT_MODEL } from "@/lib/agent-models"
+
+export { AVAILABLE_MODELS, DEFAULT_MODEL } from "@/lib/agent-models"
+export type { ModelId } from "@/lib/agent-models"
+
+// Point at OpenRouter when the key is present; otherwise the SDK picks up OPENAI_API_KEY.
+if (process.env.OPENROUTER_API_KEY) {
+  setDefaultModelProvider(
+    new OpenAIProvider({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: "https://openrouter.ai/api/v1",
+    })
+  )
+}
 
 const SYSTEM_PROMPT = `
 You are the WSAI workspace assistant. You help users read, search, summarize, reply, and manage their Gmail and Google Calendar — all from one workspace.
@@ -50,33 +64,21 @@ Useful Calendar patterns:
 - When you cannot complete a task because credentials are missing or the operation does not exist, say so clearly and suggest what the user should check.
 `.trim()
 
-export async function streamWsaiAgent(tenantId: string, prompt: string) {
+export async function streamWsaiAgent(
+  tenantId: string,
+  prompt: string,
+  model: string = DEFAULT_MODEL
+) {
   const corsair = getCorsairInstance().withTenant(tenantId)
   const provider = new OpenAIAgentsProvider()
   const tools = provider.build({ corsair, tool })
 
   const agent = new Agent({
     name: "wsai-agent",
-    model: "gpt-4.1",
+    model,
     instructions: SYSTEM_PROMPT,
     tools,
   })
 
   return run(agent, prompt, { stream: true })
-}
-
-export async function runWsaiAgent(prompt: string) {
-  const provider = new OpenAIAgentsProvider()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tools = provider.build({ corsair: getCorsairInstance() as any, tool })
-
-  const agent = new Agent({
-    name: "wsai-agent",
-    model: "gpt-4.1",
-    instructions: SYSTEM_PROMPT,
-    tools,
-  })
-
-  const result = await run(agent, prompt)
-  return result.finalOutput
 }
