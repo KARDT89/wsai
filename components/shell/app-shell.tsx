@@ -5,8 +5,11 @@ import { usePathname, useRouter } from "next/navigation"
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  AiChat01Icon,
   AiMail01Icon,
+  ArrowUp01Icon,
   CalendarDaysIcon,
+  Cancel01Icon,
   CommandIcon,
   Database01Icon,
   Logout01Icon,
@@ -19,7 +22,9 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { authClient } from "@/lib/auth-client"
+import { useAiContext } from "@/lib/ai-context"
 import { ModeToggle } from "@/components/theme-toggle"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -40,6 +45,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import {
   Sheet,
@@ -50,6 +56,12 @@ import {
 } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+
+type ChatMessage = {
+  id: string
+  role: "user" | "assistant"
+  content: string
+}
 
 type AppShellProps = {
   children: React.ReactNode
@@ -101,6 +113,12 @@ export function AppShell({ children, user }: AppShellProps) {
   const [commandOpen, setCommandOpen] = React.useState(false)
   const [aiOpen, setAiOpen] = React.useState(false)
   const [isSigningOut, setIsSigningOut] = React.useState(false)
+  const [messages, setMessages] = React.useState<ChatMessage[]>([])
+  const [input, setInput] = React.useState("")
+  const [streaming, setStreaming] = React.useState(false)
+  const messagesEndRef = React.useRef<HTMLDivElement>(null)
+  const msgCounter = React.useRef(0)
+  const { contextText, contextLabel, clearAiContext } = useAiContext()
 
   React.useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -114,11 +132,77 @@ export function AppShell({ children, user }: AppShellProps) {
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
 
+  React.useEffect(() => {
+    if (aiOpen) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [messages, aiOpen])
+
   const activeItem =
     navItems.find((item) => pathname.startsWith(item.href)) ?? navItems[0]
   const sectionName = sectionLabels[activeItem.href] ?? "Mail"
   const actionLabel = actionLabels[activeItem.href] ?? "Compose"
   const actionHref = actionHrefs[activeItem.href] ?? "/mail"
+
+  async function handleSend() {
+    if (!input.trim() || streaming) return
+
+    const userText = input.trim()
+    const userId = String(++msgCounter.current)
+    const assistantId = String(++msgCounter.current)
+
+    setMessages((prev) => [
+      ...prev,
+      { id: userId, role: "user", content: userText },
+      { id: assistantId, role: "assistant", content: "" },
+    ])
+    setInput("")
+    setStreaming(true)
+
+    try {
+      const response = await fetch("/api/agent/chat", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: userText, context: contextText ?? undefined }),
+      })
+
+      if (!response.ok || !response.body) {
+        const err = await response.json().catch(() => null)
+        throw new Error((err as { error?: string } | null)?.error ?? "Request failed")
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const chunk = decoder.decode(value, { stream: true })
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: m.content + chunk } : m
+          )
+        )
+      }
+    } catch (err) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: "Something went wrong. Please try again." }
+            : m
+        )
+      )
+    } finally {
+      setStreaming(false)
+    }
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault()
+      void handleSend()
+    }
+  }
 
   async function handleSignOut() {
     setIsSigningOut(true)
@@ -247,7 +331,7 @@ export function AppShell({ children, user }: AppShellProps) {
                 </Link>
               </Button>
             </div>
-            <div className="min-w-[8rem]">
+            <div className="min-w-32">
               <p className="truncate text-sm font-medium">{sectionName}</p>
             </div>
             <div className="relative hidden w-full max-w-2xl md:block">
@@ -271,6 +355,16 @@ export function AppShell({ children, user }: AppShellProps) {
             <HugeiconsIcon icon={CommandIcon} strokeWidth={2} className="size-4" />
             <span>Command</span>
             <span className="font-mono text-xs text-muted-foreground">K</span>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            onClick={() => setAiOpen(true)}
+            title="Open AI assistant"
+          >
+            <HugeiconsIcon icon={AiChat01Icon} strokeWidth={2} className="size-4" />
+            <span className="sr-only">Open AI assistant</span>
           </Button>
           <ModeToggle />
           <Button asChild>
@@ -324,36 +418,120 @@ export function AppShell({ children, user }: AppShellProps) {
       </CommandDialog>
 
       <Sheet open={aiOpen} onOpenChange={setAiOpen}>
-        <SheetContent className="h-svh max-h-svh w-full gap-0 overflow-hidden p-0 sm:max-w-xl">
-          <SheetHeader className="shrink-0 pr-12">
-            <SheetTitle>wsai assistant</SheetTitle>
-            <SheetDescription>
-              Context: {sectionName}
+        <SheetContent className="flex h-svh max-h-svh w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+          <SheetHeader className="shrink-0 border-b px-4 py-3 pr-12">
+            <SheetTitle className="text-sm font-semibold">wsai assistant</SheetTitle>
+            <SheetDescription className="sr-only">
+              AI assistant for {sectionName}
             </SheetDescription>
-          </SheetHeader>
-          <Separator className="shrink-0" />
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4">
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain rounded-lg border bg-muted/30 p-3 text-sm">
-              <p className="text-muted-foreground">
-                Ask me to summarize, draft, search, schedule, or prepare an
-                action. Write operations will be routed through approvals.
-              </p>
-              <div className="rounded-md bg-background p-3">
-                <p className="font-medium">Suggested</p>
-                <p className="mt-1 text-muted-foreground">
-                  Summarize the selected thread and propose a reply.
-                </p>
+            {contextLabel ? (
+              <div className="flex items-center gap-1.5 pt-1">
+                <Badge variant="secondary" className="h-5 gap-1 pl-2 pr-1 text-xs">
+                  <span className="max-w-52 truncate">{contextLabel}</span>
+                  <button
+                    type="button"
+                    onClick={clearAiContext}
+                    className="ml-0.5 rounded-sm opacity-60 transition-opacity hover:opacity-100"
+                  >
+                    <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-3" />
+                    <span className="sr-only">Clear context</span>
+                  </button>
+                </Badge>
               </div>
-            </div>
-            <div className="shrink-0 space-y-2">
+            ) : null}
+          </SheetHeader>
+
+          <ScrollArea className="min-h-0 flex-1">
+            {messages.length === 0 ? (
+              <div className="flex flex-col gap-3 p-4">
+                <p className="text-sm text-muted-foreground">
+                  Ask me anything about your mail or calendar. I can summarize threads, draft replies, search for emails, or schedule meetings.
+                </p>
+                <div className="grid gap-2">
+                  {[
+                    "Summarize the selected thread",
+                    "Draft a polite reply",
+                    "What needs my attention today?",
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      className="rounded-md border bg-muted/40 px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+                      onClick={() => {
+                        setInput(suggestion)
+                      }}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3 p-4">
+                {messages.map((message, index) => (
+                  <div
+                    key={message.id}
+                    className={cn(
+                      "flex flex-col gap-1",
+                      message.role === "user" ? "items-end" : "items-start"
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "max-w-[85%] rounded-xl px-3 py-2 text-sm",
+                        message.role === "user"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-foreground"
+                      )}
+                    >
+                      {message.content === "" &&
+                      streaming &&
+                      index === messages.length - 1 ? (
+                        <span className="inline-flex gap-0.5">
+                          <span className="animate-bounce [animation-delay:0ms]">·</span>
+                          <span className="animate-bounce [animation-delay:150ms]">·</span>
+                          <span className="animate-bounce [animation-delay:300ms]">·</span>
+                        </span>
+                      ) : (
+                        <p className="whitespace-pre-wrap">{message.content}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </ScrollArea>
+
+          <div className="shrink-0 border-t p-3">
+            <div className="flex items-end gap-2">
               <Textarea
-                className="max-h-40 min-h-24 resize-none overflow-y-auto"
-                placeholder="Ask wsai anything about this workspace"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask wsai… (Enter to send, Shift+Enter for new line)"
+                className="max-h-32 min-h-16 flex-1 resize-none"
+                disabled={streaming}
               />
-              <Button type="button" className="w-full">
-                Send to wsai
+              <Button
+                type="button"
+                size="icon-sm"
+                disabled={!input.trim() || streaming}
+                onClick={() => void handleSend()}
+              >
+                <HugeiconsIcon icon={ArrowUp01Icon} strokeWidth={2} className="size-4" />
+                <span className="sr-only">Send</span>
               </Button>
             </div>
+            {messages.length > 0 ? (
+              <button
+                type="button"
+                className="mt-2 text-xs text-muted-foreground underline-offset-2 hover:underline"
+                onClick={() => setMessages([])}
+              >
+                Clear conversation
+              </button>
+            ) : null}
           </div>
         </SheetContent>
       </Sheet>

@@ -97,34 +97,30 @@ async function getEntityCounts(tenantId: string) {
 
 async function getAccountStatus(tenantId: string) {
   const accounts = await prisma.corsairAccount.findMany({
-    where: {
-      tenantId,
-    },
+    where: { tenantId },
     select: {
       config: true,
+      dek: true,
       integration: {
-        select: {
-          name: true,
-        },
+        select: { name: true },
       },
     },
   })
   const status: Record<string, boolean> = {}
 
   for (const account of accounts) {
-    status[account.integration.name] = hasEncryptedAccountConfig(account.config)
+    // Check config content — Corsair may regenerate dek on every setup call,
+    // so dek alone is not a reliable "connected" signal. Config is only populated
+    // when OAuth completes and is cleared to {} on disconnect.
+    const config = account.config as Record<string, unknown>
+    const hasTokens =
+      config !== null &&
+      typeof config === "object" &&
+      Object.keys(config).length > 0
+    status[account.integration.name] = hasTokens
   }
 
   return status
-}
-
-function hasEncryptedAccountConfig(config: unknown) {
-  return (
-    config !== null &&
-    typeof config === "object" &&
-    !Array.isArray(config) &&
-    Object.keys(config).length > 0
-  )
 }
 
 function hasIntegrationCredentials(pluginId: string) {

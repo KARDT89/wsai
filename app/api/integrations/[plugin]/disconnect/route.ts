@@ -43,21 +43,16 @@ export async function POST(
 
     await prisma.$transaction([
       prisma.corsairEntity.deleteMany({
-        where: {
-          accountId: account.id,
-        },
+        where: { accountId: account.id },
       }),
       prisma.corsairEvent.deleteMany({
-        where: {
-          accountId: account.id,
-        },
+        where: { accountId: account.id },
       }),
       prisma.corsairAccount.update({
-        where: {
-          id: account.id,
-        },
+        where: { id: account.id },
         data: {
           config: {},
+          dek: null,
         },
       }),
     ])

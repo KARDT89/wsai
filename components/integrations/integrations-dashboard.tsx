@@ -66,8 +66,14 @@ export function IntegrationsDashboard() {
   })
   const syncMutation = useMutation({
     mutationFn: syncIntegration,
-    onSuccess: () => {
+    onSuccess: (_data, plugin) => {
       queryClient.invalidateQueries({ queryKey: ["integrations"] })
+      if (plugin === "gmail") {
+        queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })
+      }
+      if (plugin === "googlecalendar") {
+        queryClient.invalidateQueries({ queryKey: ["calendar", "events"] })
+      }
     },
   })
   const disconnectMutation = useMutation({

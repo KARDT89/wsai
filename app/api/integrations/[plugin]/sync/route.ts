@@ -4,8 +4,7 @@ import {
   ensureCorsairSetup,
   isKnownCorsairPlugin,
 } from "@/lib/corsair/server"
-import { isSyncableCorsairPlugin } from "@/lib/corsair/sync"
-import { enqueueCorsairSync } from "@/inngest/events"
+import { syncCorsairPlugin, isSyncableCorsairPlugin } from "@/lib/corsair/sync"
 import { getCurrentSession } from "@/lib/session"
 
 export async function POST(
@@ -26,20 +25,16 @@ export async function POST(
 
   try {
     await ensureCorsairSetup(session.user.id)
-    await enqueueCorsairSync({
-      tenantId: session.user.id,
-      plugin,
-      reason: "manual",
-    })
+    const result = await syncCorsairPlugin(session.user.id, plugin)
 
-    return NextResponse.json({ queued: true, plugin })
+    return NextResponse.json(result)
   } catch (error) {
     return NextResponse.json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "Unable to queue sync.",
+            : "Unable to sync integration.",
       },
       { status: 500 }
     )

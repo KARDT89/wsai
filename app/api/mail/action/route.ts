@@ -9,6 +9,11 @@ const threadActions = [
   "archive",
   "trash",
   "untrash",
+  "markRead",
+  "markUnread",
+  "spam",
+  "label",
+  "unlabel",
 ] as const
 
 type ThreadAction = (typeof threadActions)[number]
@@ -37,6 +42,7 @@ export async function POST(request: Request) {
   const payload = (await request.json()) as {
     threadId?: string
     action?: string
+    labelId?: string
   }
 
   if (!payload.threadId || !isThreadAction(payload.action)) {
@@ -46,10 +52,17 @@ export async function POST(request: Request) {
     )
   }
 
+  if ((payload.action === "label" || payload.action === "unlabel") && !payload.labelId) {
+    return NextResponse.json(
+      { error: "labelId is required for label/unlabel actions." },
+      { status: 400 }
+    )
+  }
+
   try {
     await ensureCorsairSetup(session.user.id)
     const gmail = getCorsairInstance().withTenant(session.user.id).gmail.api
-    const result = await runThreadAction(gmail, payload.threadId, payload.action)
+    const result = await runThreadAction(gmail, payload.threadId, payload.action, payload.labelId)
 
     return NextResponse.json({ thread: result })
   } catch (error) {
@@ -70,7 +83,8 @@ function isThreadAction(action?: string): action is ThreadAction {
 function runThreadAction(
   gmail: GmailThreadApi,
   threadId: string,
-  action: ThreadAction
+  action: ThreadAction,
+  labelId?: string
 ) {
   if (action === "star") {
     return gmail.threads.modify({ id: threadId, addLabelIds: ["STARRED"] })
@@ -86,6 +100,30 @@ function runThreadAction(
 
   if (action === "trash") {
     return gmail.threads.trash({ id: threadId })
+  }
+
+  if (action === "untrash") {
+    return gmail.threads.untrash({ id: threadId })
+  }
+
+  if (action === "markRead") {
+    return gmail.threads.modify({ id: threadId, removeLabelIds: ["UNREAD"] })
+  }
+
+  if (action === "markUnread") {
+    return gmail.threads.modify({ id: threadId, addLabelIds: ["UNREAD"] })
+  }
+
+  if (action === "spam") {
+    return gmail.threads.modify({ id: threadId, addLabelIds: ["SPAM"], removeLabelIds: ["INBOX"] })
+  }
+
+  if (action === "label" && labelId) {
+    return gmail.threads.modify({ id: threadId, addLabelIds: [labelId] })
+  }
+
+  if (action === "unlabel" && labelId) {
+    return gmail.threads.modify({ id: threadId, removeLabelIds: [labelId] })
   }
 
   return gmail.threads.untrash({ id: threadId })
