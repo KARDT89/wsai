@@ -280,13 +280,39 @@ export function CalendarDashboard() {
 
         <Separator />
 
-        <div className="text-xs text-muted-foreground space-y-1">
-          <p className="font-medium mb-1">Shortcuts</p>
-          <p><kbd className="font-mono">n</kbd> New event</p>
-          <p><kbd className="font-mono">t</kbd> Today</p>
-          <p><kbd className="font-mono">w/m/d</kbd> Change view</p>
-          <p><kbd className="font-mono">←/→</kbd> Navigate</p>
-          <p><kbd className="font-mono">Del</kbd> Delete selected</p>
+        <div>
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Shortcuts
+          </p>
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <div className="flex items-center justify-between">
+              <span>New event</span>
+              <kbd className="rounded border px-1 font-mono">n</kbd>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Today</span>
+              <kbd className="rounded border px-1 font-mono">t</kbd>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Navigate</span>
+              <div className="flex gap-1">
+                <kbd className="rounded border px-1 font-mono">←</kbd>
+                <kbd className="rounded border px-1 font-mono">→</kbd>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Week / Month / Day</span>
+              <div className="flex gap-1">
+                <kbd className="rounded border px-1 font-mono">w</kbd>
+                <kbd className="rounded border px-1 font-mono">m</kbd>
+                <kbd className="rounded border px-1 font-mono">d</kbd>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Delete selected</span>
+              <kbd className="rounded border px-1 font-mono">Del</kbd>
+            </div>
+          </div>
         </div>
       </aside>
 

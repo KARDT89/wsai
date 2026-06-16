@@ -1147,7 +1147,7 @@ function EmailHtmlFrame({ html }: { html: string }) {
         title="Email body"
         sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         srcDoc={srcDoc}
-        className="h-[var(--email-document-height,400px)] w-full"
+        className="h-(--email-document-height,400px) w-full"
         onLoad={updateHeight}
       />
     </div>
