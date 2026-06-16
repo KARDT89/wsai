@@ -4,6 +4,8 @@ export type MailMessage = {
   email?: string
   meta: string
   body: string
+  bodyHtml?: string
+  bodyText?: string
   timestamp?: string
 }
 
@@ -20,6 +22,7 @@ export type MailThread = {
   starred: boolean
   attachment: boolean
   labels: string[]
+  systemLabels: string[]
   messages: MailMessage[]
 }
 

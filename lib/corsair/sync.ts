@@ -8,6 +8,17 @@ type SyncResult = {
   synced: number
 }
 
+export const gmailMailboxes = [
+  "inbox",
+  "starred",
+  "snoozed",
+  "sent",
+  "drafts",
+  "trash",
+] as const
+
+export type GmailMailbox = (typeof gmailMailboxes)[number]
+
 export const syncableCorsairPlugins = ["gmail", "googlecalendar"] as const
 
 export type SyncableCorsairPluginId = (typeof syncableCorsairPlugins)[number]
@@ -94,11 +105,62 @@ export async function syncPrimaryCorsairPlugins(tenantId: string) {
 }
 
 async function syncGmail(tenantId: string): Promise<SyncResult> {
+  const result = await syncGmailMailbox(tenantId, "inbox")
+
+  return {
+    plugin: "gmail",
+    synced: result.synced,
+  }
+}
+
+export async function syncGmailMailbox(tenantId: string, mailbox: GmailMailbox) {
   const corsair = getCorsairInstance().withTenant(tenantId)
   const gmailApi = corsair.gmail.api
+
+  if (mailbox === "drafts") {
+    const response = await gmailApi.drafts.list({ maxResults: 25 })
+    const drafts = response.drafts ?? []
+
+    const draftDetails = await Promise.all(
+      drafts.slice(0, 25).map((draft) =>
+        draft.id
+          ? gmailApi.drafts.get({
+              id: draft.id,
+              format: "full",
+            })
+          : null
+      )
+    )
+    const messageIds = new Set<string>()
+
+    for (const draft of draftDetails) {
+      if (draft?.message?.id) {
+        messageIds.add(draft.message.id)
+      }
+    }
+
+    await Promise.all(
+      [...messageIds].map((id) =>
+        gmailApi.messages.get({
+          id,
+          format: "full",
+        })
+      )
+    )
+
+    await gmailApi.labels.list({})
+
+    return {
+      mailbox,
+      synced: drafts.length,
+    }
+  }
+
+  const labelIds = getMailboxLabelIds(mailbox)
   const response = await gmailApi.threads.list({
     maxResults: 25,
-    labelIds: ["INBOX"],
+    labelIds,
+    includeSpamTrash: mailbox === "trash",
   })
   const threads = response.threads ?? []
 
@@ -134,9 +196,18 @@ async function syncGmail(tenantId: string): Promise<SyncResult> {
   await gmailApi.labels.list({})
 
   return {
-    plugin: "gmail",
+    mailbox,
     synced: threads.length,
   }
+}
+
+function getMailboxLabelIds(mailbox: GmailMailbox) {
+  if (mailbox === "inbox") return ["INBOX"]
+  if (mailbox === "starred") return ["STARRED"]
+  if (mailbox === "snoozed") return ["SNOOZED"]
+  if (mailbox === "sent") return ["SENT"]
+  if (mailbox === "trash") return ["TRASH"]
+  return undefined
 }
 
 async function syncGoogleCalendar(tenantId: string): Promise<SyncResult> {

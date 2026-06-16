@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db"
+import type { GmailMailbox } from "@/lib/corsair/sync"
 import type { CalendarEvent, MailMessage, MailThread } from "@/lib/workspace-types"
 
 type CachedEntity = {
@@ -29,6 +30,15 @@ const GMAIL_MESSAGE_TYPES = new Set([
   "gmail_messages",
 ])
 
+const GMAIL_DRAFT_TYPES = new Set([
+  "draft",
+  "drafts",
+  "gmail.draft",
+  "gmail.drafts",
+  "gmail_draft",
+  "gmail_drafts",
+])
+
 const CALENDAR_EVENT_TYPES = new Set([
   "event",
   "events",
@@ -41,9 +51,13 @@ const CALENDAR_EVENT_TYPES = new Set([
 ])
 
 export async function getCachedMailThreads(
-  tenantId: string
+  tenantId: string,
+  mailbox: GmailMailbox = "inbox"
 ): Promise<MailThread[]> {
   const entities = await getEntitiesForIntegration(tenantId, "gmail")
+  const draftEntities = entities.filter((entity) =>
+    GMAIL_DRAFT_TYPES.has(normalizeType(entity.entityType))
+  )
   const threadEntities = entities.filter((entity) =>
     GMAIL_THREAD_TYPES.has(normalizeType(entity.entityType))
   )
@@ -51,13 +65,22 @@ export async function getCachedMailThreads(
     GMAIL_MESSAGE_TYPES.has(normalizeType(entity.entityType))
   )
 
-  if (threadEntities.length > 0) {
-    return threadEntities
-      .map((entity) => mapThreadEntity(entity, messageEntities))
+  if (mailbox === "drafts") {
+    return draftEntities
+      .map((entity) => mapDraftEntity(entity, messageEntities))
       .sort(compareMailThreads)
   }
 
-  return mapMessagesToThreads(messageEntities).sort(compareMailThreads)
+  if (threadEntities.length > 0) {
+    return threadEntities
+      .map((entity) => mapThreadEntity(entity, messageEntities))
+      .filter((thread) => matchesMailbox(thread, mailbox))
+      .sort(compareMailThreads)
+  }
+
+  return mapMessagesToThreads(messageEntities)
+    .filter((thread) => matchesMailbox(thread, mailbox))
+    .sort(compareMailThreads)
 }
 
 export async function getCachedCalendarEvents(
@@ -128,18 +151,32 @@ function mapThreadEntity(
               asRecord(messageEntity.data),
               messageEntity.updatedAt
             )
-          )
+  )
 
-  const latestMessage = latestMailMessage(messages)
-  const labelIds = getStringArray(data, "labelIds", "label_ids", "labels")
+  const richMessageEntities = messageEntities.filter((messageEntity) => {
+    const message = asRecord(messageEntity.data)
+    return getThreadId(message, messageEntity.entityId) === entity.entityId
+  })
+  const richMessages = richMessageEntities.map((messageEntity) =>
+    mapMailMessage(
+      messageEntity.entityId,
+      asRecord(messageEntity.data),
+      messageEntity.updatedAt
+    )
+  )
+  const displayMessages = richMessages.length > 0 ? richMessages : messages
+  const latestMessage = latestMailMessage(displayMessages)
+  const labelIds = getMessageLabels(data, richMessageEntities)
   const latestRawMessage = latestRawMailMessage(getArray(data, "messages"))
   const latestRawRecord = latestRawMessage ? asRecord(latestRawMessage) : {}
+  const latestPreview =
+    latestMessage?.bodyText ?? latestMessage?.body ?? stripHtml(latestMessage?.bodyHtml)
   const subject =
     getHeader(data, "Subject") ??
     getString(data, "subject") ??
     getHeader(latestRawRecord, "Subject") ??
     getString(latestRawRecord, "subject") ??
-    latestMessage?.body.slice(0, 72) ??
+    latestPreview?.slice(0, 72) ??
     "(no subject)"
   const fromHeader =
     getHeader(data, "From") ??
@@ -161,7 +198,7 @@ function mapThreadEntity(
     sender: parsedSender.name || latestMessage?.author || "Unknown sender",
     email: parsedSender.email || latestMessage?.email,
     subject,
-    snippet: getString(data, "snippet", "preview") ?? latestMessage?.body ?? "",
+    snippet: getString(data, "snippet", "preview") ?? latestPreview ?? "",
     time: formatMailboxTime(timestamp),
     timestamp,
     unread: labelIds.includes("UNREAD") || getBoolean(data, "isUnread", "unread"),
@@ -169,11 +206,12 @@ function mapThreadEntity(
     attachment:
       getBoolean(data, "hasAttachment", "has_attachment") ||
       hasAttachments(data) ||
-      messages.some((message) => message.body.toLowerCase().includes("attached")),
+      displayMessages.some((message) => message.body.toLowerCase().includes("attached")),
     labels: normalizeLabels(labelIds),
+    systemLabels: labelIds,
     messages:
-      messages.length > 0
-        ? messages.sort(compareMailMessages)
+      displayMessages.length > 0
+        ? displayMessages.sort(compareMailMessages)
         : [
             {
               id: entity.entityId,
@@ -181,6 +219,7 @@ function mapThreadEntity(
               email: parsedSender.email,
               meta: formatDateTime(timestamp),
               body: getString(data, "snippet", "preview") ?? "",
+              bodyText: getString(data, "snippet", "preview") ?? "",
               timestamp,
             },
           ],
@@ -206,7 +245,7 @@ function mapMessagesToThreads(messageEntities: CachedEntity[]): MailThread[] {
     const latestEntity =
       entities.find((entity) => entity.entityId === latest?.id) ?? entities[0]
     const data = asRecord(latestEntity.data)
-    const labelIds = getStringArray(data, "labelIds", "label_ids", "labels")
+    const labelIds = getMessageLabels(data)
     const fromHeader =
       getHeader(data, "From") ?? getString(data, "from", "sender", "fromEmail")
     const parsedSender = parseAddress(fromHeader)
@@ -229,9 +268,64 @@ function mapMessagesToThreads(messageEntities: CachedEntity[]): MailThread[] {
       starred: labelIds.includes("STARRED") || getBoolean(data, "starred"),
       attachment: getBoolean(data, "hasAttachment", "has_attachment") || hasAttachments(data),
       labels: normalizeLabels(labelIds),
+      systemLabels: labelIds,
       messages: messages.sort(compareMailMessages),
     }
   })
+}
+
+function mapDraftEntity(
+  entity: CachedEntity,
+  messageEntities: CachedEntity[]
+): MailThread {
+  const data = asRecord(entity.data)
+  const draftMessage = asRecord(data.message)
+  const messageId =
+    getString(data, "messageId", "message_id") ??
+    getString(draftMessage, "id") ??
+    entity.entityId
+  const messageEntity = messageEntities.find((candidate) => {
+    const candidateData = asRecord(candidate.data)
+    return (
+      candidate.entityId === messageId ||
+      getString(candidateData, "id") === messageId
+    )
+  })
+  const message =
+    messageEntity ? asRecord(messageEntity.data) : draftMessage
+  const mappedMessage = mapMailMessage(
+    messageId,
+    message,
+    messageEntity?.updatedAt ?? entity.updatedAt
+  )
+  const toHeader = getHeader(message, "To") ?? getString(message, "to")
+  const parsedRecipient = parseAddress(toHeader)
+  const subject =
+    getHeader(message, "Subject") ?? getString(message, "subject") ?? "Draft"
+  const timestamp = mappedMessage.timestamp ?? entity.updatedAt.toISOString()
+  const labelIds = getMessageLabels(message, messageEntity ? [messageEntity] : [])
+
+  return {
+    id: entity.id,
+    corsairId: getThreadId(message, entity.entityId),
+    sender: parsedRecipient.name || parsedRecipient.email || "Draft",
+    email: parsedRecipient.email,
+    subject,
+    snippet: mappedMessage.bodyText ?? mappedMessage.body,
+    time: formatMailboxTime(timestamp),
+    timestamp,
+    unread: false,
+    starred: labelIds.includes("STARRED"),
+    attachment: hasAttachments(message),
+    labels: ["draft"],
+    systemLabels: [...new Set(["DRAFT", ...labelIds])],
+    messages: [
+      {
+        ...mappedMessage,
+        author: "Draft",
+      },
+    ],
+  }
 }
 
 function mapMailMessage(
@@ -246,6 +340,12 @@ function mapMailMessage(
     getHeader(data, "Date") ??
     getString(data, "internalDate", "date", "createdAt", "created_at") ??
     fallbackDate.toISOString()
+  const bodies = getPayloadBodies(data)
+  const bodyText =
+    getString(data, "body", "text", "plainText", "snippet", "preview") ??
+    bodies.text
+  const bodyHtml = getString(data, "html", "bodyHtml") ?? bodies.html
+  const displayBody = bodyText ?? stripHtml(bodyHtml) ?? ""
 
   return {
     id,
@@ -256,10 +356,9 @@ function mapMailMessage(
       "Unknown sender",
     email: parsedSender.email,
     meta: formatDateTime(timestamp),
-    body:
-      getString(data, "body", "text", "plainText", "snippet", "preview") ??
-      getPayloadText(data) ??
-      "",
+    body: displayBody,
+    bodyHtml,
+    bodyText,
     timestamp,
   }
 }
@@ -350,6 +449,32 @@ function getStringArray(record: JsonRecord, ...keys: string[]) {
     .filter((value): value is string => Boolean(value))
 }
 
+function getMessageLabels(record: JsonRecord, entities: CachedEntity[] = []) {
+  const directLabels = getStringArray(record, "labelIds", "label_ids", "labels")
+  const messageLabels = getArray(record, "messages").flatMap((message) =>
+    getStringArray(asRecord(message), "labelIds", "label_ids", "labels")
+  )
+  const entityLabels = entities.flatMap((entity) =>
+    getStringArray(asRecord(entity.data), "labelIds", "label_ids", "labels")
+  )
+
+  return [...new Set([...directLabels, ...messageLabels, ...entityLabels])]
+}
+
+function matchesMailbox(thread: MailThread, mailbox: GmailMailbox) {
+  const labels = new Set(thread.systemLabels)
+
+  if (mailbox === "inbox") {
+    return labels.size === 0 || (labels.has("INBOX") && !labels.has("TRASH"))
+  }
+
+  if (mailbox === "starred") return labels.has("STARRED")
+  if (mailbox === "snoozed") return labels.has("SNOOZED")
+  if (mailbox === "sent") return labels.has("SENT")
+  if (mailbox === "trash") return labels.has("TRASH")
+  return labels.has("DRAFT")
+}
+
 function getHeader(record: JsonRecord, name: string) {
   const headers = getArray(asRecord(record.payload), "headers")
 
@@ -394,21 +519,39 @@ function hasAttachments(record: JsonRecord): boolean {
   return parts.some((part) => Boolean(getString(asRecord(part), "filename")))
 }
 
-function getPayloadText(record: JsonRecord): string | undefined {
+function getPayloadBodies(record: JsonRecord) {
   const payload = asRecord(record.payload)
-  const body = asRecord(payload.body)
-  const bodyData = getString(body, "data")
+  const bodies = collectPayloadBodies(payload)
 
-  if (bodyData) return decodeBase64Url(bodyData)
+  return {
+    html: bodies.html.join("\n"),
+    text: bodies.text.join("\n"),
+  }
+}
 
-  for (const part of getArray(payload, "parts")) {
-    const partRecord = asRecord(part)
-    const mimeType = getString(partRecord, "mimeType")
-    if (mimeType === "text/plain") {
-      const data = getString(asRecord(partRecord.body), "data")
-      if (data) return decodeBase64Url(data)
+function collectPayloadBodies(part: JsonRecord): { html: string[]; text: string[] } {
+  const mimeType = getString(part, "mimeType")?.toLowerCase()
+  const bodyData = getString(asRecord(part.body), "data")
+  const html: string[] = []
+  const text: string[] = []
+
+  if (bodyData) {
+    const decoded = decodeBase64Url(bodyData)
+
+    if (decoded && mimeType === "text/html") {
+      html.push(decoded)
+    } else if (decoded && mimeType === "text/plain") {
+      text.push(decoded)
     }
   }
+
+  for (const child of getArray(part, "parts")) {
+    const childBodies = collectPayloadBodies(asRecord(child))
+    html.push(...childBodies.html)
+    text.push(...childBodies.text)
+  }
+
+  return { html, text }
 }
 
 function decodeBase64Url(value: string) {
@@ -420,6 +563,16 @@ function decodeBase64Url(value: string) {
   } catch {
     return undefined
   }
+}
+
+function stripHtml(value?: string) {
+  if (!value) return undefined
+  return value
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
 }
 
 function getConferenceLink(record: JsonRecord) {

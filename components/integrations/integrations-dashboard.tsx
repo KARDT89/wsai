@@ -11,6 +11,8 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   CalendarDaysIcon,
+  CancelCircleIcon,
+  ConnectIcon,
   Database01Icon,
   Mail01Icon,
   RefreshIcon,
@@ -70,6 +72,14 @@ export function IntegrationsDashboard() {
       queryClient.invalidateQueries({ queryKey: ["calendar", "events"] })
     },
   })
+  const disconnectMutation = useMutation({
+    mutationFn: disconnectIntegration,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["integrations"] })
+      queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })
+      queryClient.invalidateQueries({ queryKey: ["calendar", "events"] })
+    },
+  })
 
   const integrations = integrationsQuery.data?.integrations ?? []
   const primaryIntegrations = integrations.filter((integration) =>
@@ -85,9 +95,8 @@ export function IntegrationsDashboard() {
         <div className="flex flex-col gap-1">
           <h1 className="text-xl font-semibold tracking-normal">Connect apps</h1>
           <p className="max-w-2xl text-sm text-muted-foreground">
-            Connect Gmail and Google Calendar with Corsair OAuth. WSAI stores
-            account tokens per Better Auth user tenant and reads synced entities
-            from your database.
+            Connect the apps you want WSAI to use. Disconnect any app when you
+            no longer want it available in your workspace.
           </p>
         </div>
         <Button
@@ -125,6 +134,20 @@ export function IntegrationsDashboard() {
         </Alert>
       ) : null}
 
+      {syncMutation.error ? (
+        <Alert variant="destructive">
+          <AlertTitle>Sync failed</AlertTitle>
+          <AlertDescription>{syncMutation.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {disconnectMutation.error ? (
+        <Alert variant="destructive">
+          <AlertTitle>Disconnect failed</AlertTitle>
+          <AlertDescription>{disconnectMutation.error.message}</AlertDescription>
+        </Alert>
+      ) : null}
+
       {integrationsQuery.isLoading ? (
         <div className="grid gap-3 lg:grid-cols-2">
           <Skeleton className="h-56" />
@@ -150,6 +173,7 @@ export function IntegrationsDashboard() {
               key={integration.id}
               integration={integration}
               syncMutation={syncMutation}
+              disconnectMutation={disconnectMutation}
             />
           ))}
         </section>
@@ -158,21 +182,21 @@ export function IntegrationsDashboard() {
       {!integrationsQuery.isLoading && primaryIntegrations.length > 0 ? (
         <section className="grid gap-3 lg:grid-cols-[1fr_1fr_1fr]">
           <div className="rounded-lg border bg-card p-4">
-            <div className="text-sm font-medium">1. OAuth</div>
+            <div className="text-sm font-medium">1. Connect</div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Click Connect and approve the Google OAuth consent screen.
+              Choose an app and approve access with the provider.
             </p>
           </div>
           <div className="rounded-lg border bg-card p-4">
-            <div className="text-sm font-medium">2. Tenant tokens</div>
+            <div className="text-sm font-medium">2. Sync</div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Corsair saves tokens under your Better Auth user id as tenant id.
+              WSAI keeps a local synced copy so the dashboard loads quickly.
             </p>
           </div>
           <div className="rounded-lg border bg-card p-4">
-            <div className="text-sm font-medium">3. Cached data</div>
+            <div className="text-sm font-medium">3. Disconnect</div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Sync writes mail threads and calendar events into `corsair_entities`.
+              Remove access and clear synced data from your workspace.
             </p>
           </div>
         </section>
@@ -193,6 +217,7 @@ export function IntegrationsDashboard() {
                 key={integration.id}
                 integration={integration}
                 syncMutation={syncMutation}
+                disconnectMutation={disconnectMutation}
               />
             ))}
           </div>
@@ -205,12 +230,18 @@ export function IntegrationsDashboard() {
 function ConnectCard({
   integration,
   syncMutation,
+  disconnectMutation,
 }: {
   integration: Integration
   syncMutation: UseMutationResult<unknown, Error, string>
+  disconnectMutation: UseMutationResult<unknown, Error, string>
 }) {
   const Icon = integrationIcons[integration.id] ?? Database01Icon
-  const isSyncing = syncMutation.variables === integration.id
+  const isSyncing =
+    syncMutation.isPending && syncMutation.variables === integration.id
+  const isDisconnecting =
+    disconnectMutation.isPending &&
+    disconnectMutation.variables === integration.id
   const canConnect =
     integration.enabled && integration.status !== "missing_credentials"
   const isConnected = integration.status === "connected"
@@ -263,13 +294,22 @@ function ConnectCard({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-2">
-          {canConnect ? (
+          {canConnect && !isConnected ? (
             <Button asChild>
               <Link href={targetHref}>
-                {isConnected
-                  ? `Reconnect ${integration.name}`
-                  : `Connect ${integration.name}`}
+                <HugeiconsIcon icon={ConnectIcon} className="size-4" />
+                Connect
               </Link>
+            </Button>
+          ) : isConnected ? (
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isDisconnecting}
+              onClick={() => disconnectMutation.mutate(integration.id)}
+            >
+              <HugeiconsIcon icon={CancelCircleIcon} className="size-4" />
+              {isDisconnecting ? "Disconnecting" : "Disconnect"}
             </Button>
           ) : (
             <Button disabled>
@@ -334,6 +374,19 @@ async function syncIntegration(plugin: string) {
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw new Error(body?.error ?? "Unable to sync integration.")
+  }
+
+  return response.json()
+}
+
+async function disconnectIntegration(plugin: string) {
+  const response = await fetch(`/api/integrations/${plugin}/disconnect`, {
+    method: "POST",
+  })
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.error ?? "Unable to disconnect integration.")
   }
 
   return response.json()

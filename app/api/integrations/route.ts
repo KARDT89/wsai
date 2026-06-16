@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 
 import {
   ensureCorsairSetup,
-  getCorsairInstance,
+  getCorsairCredentials,
   getMissingCredentialLabels,
 } from "@/lib/corsair/server"
 import { prisma } from "@/lib/db"
@@ -18,18 +18,27 @@ export async function GET() {
 
   try {
     await ensureCorsairSetup(session.user.id)
-    const status = await getCorsairInstance().manage.connectionStatus.get({
-      tenantId: session.user.id,
-    })
+    const accountStatus = await getAccountStatus(session.user.id)
     const counts = await getEntityCounts(session.user.id)
 
     return NextResponse.json({
-      integrations: integrationDefinitions.map((integration) => ({
-        ...integration,
-        status: status[integration.id] ?? "not_connected",
-        entityCount: counts[integration.id] ?? 0,
-        missingCredentials: getMissingCredentialLabels(integration.id),
-      })),
+      integrations: integrationDefinitions.map((integration) => {
+        const missingCredentials = hasIntegrationCredentials(integration.id)
+          ? []
+          : getMissingCredentialLabels(integration.id)
+
+        return {
+          ...integration,
+          status:
+            missingCredentials.length > 0
+              ? "missing_credentials"
+              : accountStatus[integration.id]
+                ? "connected"
+                : "not_connected",
+          entityCount: counts[integration.id] ?? 0,
+          missingCredentials,
+        }
+      }),
     })
   } catch (error) {
     return NextResponse.json(
@@ -84,4 +93,46 @@ async function getEntityCounts(tenantId: string) {
   }
 
   return counts
+}
+
+async function getAccountStatus(tenantId: string) {
+  const accounts = await prisma.corsairAccount.findMany({
+    where: {
+      tenantId,
+    },
+    select: {
+      config: true,
+      integration: {
+        select: {
+          name: true,
+        },
+      },
+    },
+  })
+  const status: Record<string, boolean> = {}
+
+  for (const account of accounts) {
+    status[account.integration.name] = hasEncryptedAccountConfig(account.config)
+  }
+
+  return status
+}
+
+function hasEncryptedAccountConfig(config: unknown) {
+  return (
+    config !== null &&
+    typeof config === "object" &&
+    !Array.isArray(config) &&
+    Object.keys(config).length > 0
+  )
+}
+
+function hasIntegrationCredentials(pluginId: string) {
+  const credentials = getCorsairCredentials()
+
+  if (pluginId === "gmail" || pluginId === "googlecalendar") {
+    return Boolean(credentials[pluginId])
+  }
+
+  return true
 }
