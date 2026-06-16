@@ -1,11 +1,5 @@
-import { PlaceholderSurface } from "@/components/shell/placeholder-surface"
+import { CalendarDashboard } from "@/components/calendar/calendar-dashboard"
 
 export default function CalendarPage() {
-  return (
-    <PlaceholderSurface
-      title="Calendar"
-      eyebrow="Phase 5"
-      description="Week view, event detail, and new-event flow belong here after mail and the Corsair sync path are in place."
-    />
-  )
+  return <CalendarDashboard />
 }

@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { useQuery } from "@tanstack/react-query"
 import {
   ArchiveIcon,
   AttachmentIcon,
@@ -19,6 +20,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import type { MailThread } from "@/lib/workspace-types"
 
 const labels = [
   { name: "Inbox", count: 18, icon: InboxIcon, active: true },
@@ -36,122 +38,35 @@ const customLabels = [
   { name: "Finance", color: "bg-rose-500" },
 ]
 
-const threads = [
-  {
-    id: "maya-investor",
-    sender: "Maya Chen",
-    email: "maya@northpier.capital",
-    subject: "Follow-up on revised terms",
-    snippet:
-      "Can you confirm whether the updated participation language works before our 11:30 partner call?",
-    time: "09:42",
-    unread: true,
-    starred: true,
-    attachment: false,
-    labels: ["Investors"],
-    messages: [
-      {
-        author: "Maya Chen",
-        meta: "Today, 09:42",
-        body:
-          "Can you confirm whether the updated participation language works before our 11:30 partner call? If this looks good, I can get the revised memo into our process today.",
-      },
-      {
-        author: "You",
-        meta: "Yesterday, 18:05",
-        body:
-          "Thanks Maya. Send the latest terms over and I will review them first thing in the morning.",
-      },
-    ],
-  },
-  {
-    id: "northstar-security",
-    sender: "Northstar Ops",
-    email: "security@northstar.example",
-    subject: "Security questionnaire for enterprise trial",
-    snippet:
-      "Procurement is ready to move once the data retention and SSO answers are complete.",
-    time: "10:18",
-    unread: true,
-    starred: false,
-    attachment: true,
-    labels: ["Customers"],
-    messages: [
-      {
-        author: "Northstar Ops",
-        meta: "Today, 10:18",
-        body:
-          "Procurement is ready to move once the data retention and SSO answers are complete. We attached the short-form questionnaire and highlighted the remaining questions.",
-      },
-    ],
-  },
-  {
-    id: "candidate-close",
-    sender: "Recruiting",
-    email: "talent@wsai.local",
-    subject: "Candidate close packet review",
-    snippet:
-      "Offer details need founder approval before we send the packet this afternoon.",
-    time: "13:00",
-    unread: false,
-    starred: false,
-    attachment: true,
-    labels: ["Recruiting"],
-    messages: [
-      {
-        author: "Recruiting",
-        meta: "Today, 08:35",
-        body:
-          "The close packet is ready. The comp band is approved, but the equity memo needs your review before we send it.",
-      },
-    ],
-  },
-  {
-    id: "finance-renewal",
-    sender: "Finance",
-    email: "finance@wsai.local",
-    subject: "Vendor renewal reminder",
-    snippet:
-      "Renewal window opens next month. No action today unless you want to renegotiate seats.",
-    time: "Tue",
-    unread: false,
-    starred: false,
-    attachment: false,
-    labels: ["Finance"],
-    messages: [
-      {
-        author: "Finance",
-        meta: "Tuesday, 11:21",
-        body:
-          "Renewal window opens next month. No action today unless you want to renegotiate seats before the annual quote arrives.",
-      },
-    ],
-  },
-]
-
 export function MailWorkspace() {
-  const [selectedId, setSelectedId] = React.useState(threads[0].id)
+  const [selectedId, setSelectedId] = React.useState<string>()
+  const threadsQuery = useQuery({
+    queryKey: ["mail", "threads"],
+    queryFn: fetchMailThreads,
+  })
+  const threads = React.useMemo(() => threadsQuery.data ?? [], [threadsQuery.data])
   const selectedThread =
     threads.find((thread) => thread.id === selectedId) ?? threads[0]
 
   React.useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (threads.length === 0) return
       const index = threads.findIndex((thread) => thread.id === selectedId)
 
       if (event.key === "j") {
         event.preventDefault()
-        setSelectedId(threads[Math.min(index + 1, threads.length - 1)].id)
+        setSelectedId(threads[Math.min(Math.max(index, 0) + 1, threads.length - 1)].id)
       }
 
       if (event.key === "k") {
         event.preventDefault()
-        setSelectedId(threads[Math.max(index - 1, 0)].id)
+        setSelectedId(threads[Math.max(index - 1, 0)]?.id ?? threads[0].id)
       }
     }
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [selectedId])
+  }, [selectedId, threads])
 
   return (
     <div className="grid h-[calc(100svh-3.5rem)] grid-cols-1 bg-background md:grid-cols-[220px_minmax(320px,420px)_1fr]">
@@ -211,6 +126,19 @@ export function MailWorkspace() {
           </Badge>
         </div>
         <ScrollArea className="h-[calc(100svh-6.5rem)]">
+          {threadsQuery.isPending ? (
+            <MailState title="Loading cached Gmail" detail="Reading Corsair cache rows." />
+          ) : threadsQuery.isError ? (
+            <MailState
+              title="Could not load mail"
+              detail="The mail API returned an error while reading Corsair cache."
+            />
+          ) : threads.length === 0 ? (
+            <MailState
+              title="No cached Gmail yet"
+              detail="Connect Gmail and run Corsair backfill or wait for webhooks to populate corsair_entities."
+            />
+          ) : (
           <div className="divide-y">
             {threads.map((thread) => (
               <button
@@ -218,7 +146,7 @@ export function MailWorkspace() {
                 type="button"
                 className={cn(
                   "grid w-full gap-2 px-3 py-3 text-left transition-colors hover:bg-muted/60",
-                  selectedThread.id === thread.id && "bg-muted",
+                  selectedThread?.id === thread.id && "bg-muted",
                   thread.unread && "bg-sky-500/5"
                 )}
                 onClick={() => setSelectedId(thread.id)}
@@ -275,6 +203,7 @@ export function MailWorkspace() {
               </button>
             ))}
           </div>
+          )}
         </ScrollArea>
       </section>
 
@@ -298,6 +227,7 @@ export function MailWorkspace() {
           </p>
         </div>
 
+        {selectedThread ? (
         <ScrollArea className="flex-1">
           <article className="mx-auto max-w-4xl px-5 py-5">
             <header className="mb-5">
@@ -361,7 +291,41 @@ export function MailWorkspace() {
             </section>
           </article>
         </ScrollArea>
+        ) : (
+          <div className="flex flex-1 items-center justify-center p-6 text-center">
+            <div>
+              <h2 className="text-lg font-semibold">Select a thread</h2>
+              <p className="mt-2 max-w-sm text-sm text-muted-foreground">
+                Real Gmail threads will appear here after Corsair cache rows are available.
+              </p>
+            </div>
+          </div>
+        )}
       </section>
+    </div>
+  )
+}
+
+async function fetchMailThreads(): Promise<MailThread[]> {
+  const response = await fetch("/api/mail/threads")
+
+  if (!response.ok) {
+    throw new Error("Unable to fetch mail threads")
+  }
+
+  const payload = (await response.json()) as { threads?: MailThread[] }
+  return payload.threads ?? []
+}
+
+function MailState({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="flex min-h-72 items-center justify-center p-6 text-center">
+      <div>
+        <h2 className="text-sm font-semibold">{title}</h2>
+        <p className="mt-2 max-w-xs text-sm leading-6 text-muted-foreground">
+          {detail}
+        </p>
+      </div>
     </div>
   )
 }
