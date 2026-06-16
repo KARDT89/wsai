@@ -102,7 +102,14 @@ export function getCorsairInstance() {
   })
 }
 
+// Skip the expensive setupCorsair calls if this tenant has already been set up
+// in this process lifetime. setupCorsair is idempotent so it's safe to skip.
+const setupDoneFor = new Set<string>()
+
 export async function ensureCorsairSetup(tenantId: string, backfill = false) {
+  const cacheKey = `${tenantId}:${backfill}`
+  if (setupDoneFor.has(cacheKey)) return
+
   const corsair = getCorsairInstance()
   const integrationLog = await setupCorsair(corsair, {
     credentials: getCorsairCredentials(),
@@ -112,7 +119,14 @@ export async function ensureCorsairSetup(tenantId: string, backfill = false) {
     backfill,
   })
 
+  setupDoneFor.add(cacheKey)
   return [integrationLog, tenantLog].filter(Boolean).join("\n")
+}
+
+export function invalidateCorsairSetupCache(tenantId: string) {
+  for (const key of setupDoneFor) {
+    if (key.startsWith(`${tenantId}:`)) setupDoneFor.delete(key)
+  }
 }
 
 export function isKnownCorsairPlugin(pluginId: string): pluginId is CorsairPluginId {

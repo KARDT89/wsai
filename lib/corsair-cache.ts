@@ -87,10 +87,17 @@ export async function getCachedCalendarEvents(
   tenantId: string
 ): Promise<CalendarEvent[]> {
   const entities = await getEntitiesForIntegration(tenantId, "googlecalendar")
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+  const todayMs = todayStart.getTime()
 
   return entities
     .filter((entity) => CALENDAR_EVENT_TYPES.has(normalizeType(entity.entityType)))
     .map(mapCalendarEntity)
+    .filter((event) => {
+      const t = event.startsAt ? new Date(event.startsAt).getTime() : 0
+      return t >= todayMs
+    })
     .sort((a, b) => {
       const left = a.startsAt ? new Date(a.startsAt).getTime() : 0
       const right = b.startsAt ? new Date(b.startsAt).getTime() : 0

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server"
 
 import {
-  ensureCorsairSetup,
+  invalidateCorsairSetupCache,
   isKnownCorsairPlugin,
 } from "@/lib/corsair/server"
 import { prisma } from "@/lib/db"
@@ -24,7 +24,6 @@ export async function POST(
   }
 
   try {
-    await ensureCorsairSetup(session.user.id)
     const account = await prisma.corsairAccount.findFirst({
       where: {
         tenantId: session.user.id,
@@ -57,6 +56,7 @@ export async function POST(
       }),
     ])
 
+    invalidateCorsairSetupCache(session.user.id)
     return NextResponse.json({ disconnected: true })
   } catch (error) {
     return NextResponse.json(

@@ -1,40 +1,270 @@
 "use client"
 
-import type { ReactNode } from "react"
-import type { IconSvgElement } from "@hugeicons/react"
+import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  CalendarDaysIcon,
-  Link04Icon,
+  Add01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  Calendar03Icon,
+  Cancel01Icon,
+  CheckmarkCircle02Icon,
+  Clock01Icon,
+  Delete02Icon,
+  Edit02Icon,
   Location01Icon,
+  RefreshIcon,
   UserGroupIcon,
+  Link04Icon,
 } from "@hugeicons/core-free-icons"
+import { toast } from "sonner"
+import {
+  addDays,
+  addMonths,
+  addWeeks,
+  eachDayOfInterval,
+  endOfMonth,
+  endOfWeek,
+  format,
+  getHours,
+  getMinutes,
+  isSameDay,
+  isSameMonth,
+  isToday,
+  startOfMonth,
+  startOfWeek,
+  subMonths,
+  subWeeks,
+} from "date-fns"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
 import type { CalendarEvent } from "@/lib/workspace-types"
 
-export function CalendarDashboard() {
-  const eventsQuery = useQuery({
-    queryKey: ["calendar", "events"],
-    queryFn: fetchCalendarEvents,
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+const START_HOUR = 7
+const END_HOUR = 22
+const HOUR_HEIGHT = 64 // px per hour
+const TOTAL_HEIGHT = (END_HOUR - START_HOUR) * HOUR_HEIGHT
+const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i)
+
+type ViewMode = "week" | "month" | "day"
+
+// ─── Event helpers ───────────────────────────────────────────────────────────
+
+function eventTop(event: CalendarEvent): number {
+  if (!event.startsAt) return 0
+  const d = new Date(event.startsAt)
+  const hours = getHours(d) + getMinutes(d) / 60
+  return Math.max(0, (hours - START_HOUR) * HOUR_HEIGHT)
+}
+
+function eventHeight(event: CalendarEvent): number {
+  if (!event.startsAt || !event.endsAt) return HOUR_HEIGHT
+  const start = new Date(event.startsAt).getTime()
+  const end = new Date(event.endsAt).getTime()
+  const durationHours = Math.max(0.25, (end - start) / (1000 * 60 * 60))
+  return durationHours * HOUR_HEIGHT
+}
+
+function eventsForDay(events: CalendarEvent[], day: Date): CalendarEvent[] {
+  return events.filter((e) => e.startsAt && isSameDay(new Date(e.startsAt), day))
+}
+
+function isAllDay(event: CalendarEvent): boolean {
+  if (!event.startsAt) return true
+  const d = new Date(event.startsAt)
+  return isNaN(d.getTime()) || (getHours(d) === 0 && getMinutes(d) === 0 && !event.endsAt)
+}
+
+function toLocalDatetimeInput(iso?: string): string {
+  if (!iso) return ""
+  try {
+    const d = new Date(iso)
+    const pad = (n: number) => String(n).padStart(2, "0")
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  } catch {
+    return ""
+  }
+}
+
+function localDatetimeToISO(value: string): string {
+  if (!value) return ""
+  return new Date(value).toISOString()
+}
+
+// ─── API calls ───────────────────────────────────────────────────────────────
+
+async function fetchCalendarEvents(): Promise<CalendarEvent[]> {
+  const r = await fetch("/api/calendar/events")
+  if (!r.ok) throw new Error("Failed to load events")
+  const data = (await r.json()) as { events?: CalendarEvent[] }
+  return data.events ?? []
+}
+
+async function syncCalendar(): Promise<void> {
+  const r = await fetch("/api/calendar/sync", { method: "POST" })
+  if (!r.ok) throw new Error("Sync failed")
+}
+
+async function calendarAction(payload: Record<string, unknown>): Promise<void> {
+  const r = await fetch("/api/calendar/action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   })
+  if (!r.ok) {
+    const err = (await r.json().catch(() => ({}))) as { error?: string }
+    throw new Error(err.error ?? "Action failed")
+  }
+}
+
+// ─── Main component ──────────────────────────────────────────────────────────
+
+export function CalendarDashboard() {
+  const qc = useQueryClient()
+  const [view, setView] = React.useState<ViewMode>("week")
+  const [currentDate, setCurrentDate] = React.useState(new Date())
+  const [selectedEvent, setSelectedEvent] = React.useState<CalendarEvent | null>(null)
+  const [dialogState, setDialogState] = React.useState<{
+    open: boolean
+    mode: "create" | "edit"
+    event?: CalendarEvent
+    prefillStart?: string
+  }>({ open: false, mode: "create" })
+
+  const eventsQuery = useQuery({ queryKey: ["calendar", "events"], queryFn: fetchCalendarEvents })
   const events = eventsQuery.data ?? []
-  const upcoming = events.slice(0, 8)
-  const selected = upcoming[0]
+
+  const syncMutation = useMutation({
+    mutationFn: syncCalendar,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["calendar", "events"] })
+      toast.success("Calendar synced")
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (eventId: string) => calendarAction({ action: "delete", eventId }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["calendar", "events"] })
+      setSelectedEvent(null)
+      toast.success("Event deleted")
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  // Keyboard shortcuts
+  React.useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.target as HTMLElement).tagName === "INPUT" || (e.target as HTMLElement).tagName === "TEXTAREA") return
+      if (e.key === "Escape") { setSelectedEvent(null); setDialogState({ open: false, mode: "create" }) }
+      if (e.key === "n") { e.preventDefault(); openCreateDialog() }
+      if (e.key === "t") { e.preventDefault(); setCurrentDate(new Date()) }
+      if (e.key === "w") { e.preventDefault(); setView("week") }
+      if (e.key === "m") { e.preventDefault(); setView("month") }
+      if (e.key === "d") { e.preventDefault(); setView("day") }
+      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !dialogState.open) {
+        e.preventDefault()
+        navigate(e.key === "ArrowLeft" ? -1 : 1)
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedEvent && !dialogState.open) {
+        e.preventDefault()
+        deleteMutation.mutate(selectedEvent.corsairId)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedEvent, dialogState.open, view])
+
+  function navigate(dir: -1 | 1) {
+    if (view === "week") setCurrentDate((d) => (dir === 1 ? addWeeks(d, 1) : subWeeks(d, 1)))
+    if (view === "month") setCurrentDate((d) => (dir === 1 ? addMonths(d, 1) : subMonths(d, 1)))
+    if (view === "day") setCurrentDate((d) => addDays(d, dir))
+  }
+
+  function openCreateDialog(prefillStart?: string) {
+    setDialogState({ open: true, mode: "create", prefillStart })
+  }
+
+  function openEditDialog(event: CalendarEvent) {
+    setDialogState({ open: true, mode: "edit", event })
+  }
+
+  const weekDays = React.useMemo(() => {
+    const start = startOfWeek(currentDate, { weekStartsOn: 1 })
+    return eachDayOfInterval({ start, end: addDays(start, 6) })
+  }, [currentDate])
+
+  const monthDays = React.useMemo(() => {
+    const start = startOfWeek(startOfMonth(currentDate), { weekStartsOn: 1 })
+    const end = endOfWeek(endOfMonth(currentDate), { weekStartsOn: 1 })
+    return eachDayOfInterval({ start, end })
+  }, [currentDate])
+
+  function headerLabel() {
+    if (view === "week") {
+      const start = weekDays[0]!
+      const end = weekDays[6]!
+      if (isSameMonth(start, end)) return format(start, "MMMM yyyy")
+      return `${format(start, "MMM")} – ${format(end, "MMM yyyy")}`
+    }
+    if (view === "day") return format(currentDate, "EEEE, MMMM d, yyyy")
+    return format(currentDate, "MMMM yyyy")
+  }
 
   return (
-    <div className="grid h-[calc(100svh-3.5rem)] grid-cols-1 bg-background lg:grid-cols-[280px_1fr]">
-      <aside className="hidden border-r bg-muted/20 p-3 lg:block">
-        <Button className="w-full justify-start gap-2">
-          <HugeiconsIcon icon={CalendarDaysIcon} strokeWidth={2} className="size-4" />
+    <div className="grid h-[calc(100svh-3.5rem)] grid-cols-1 bg-background lg:grid-cols-[260px_1fr]">
+      {/* ── Sidebar ── */}
+      <aside className="hidden flex-col gap-4 border-r bg-muted/20 p-3 lg:flex">
+        <Button
+          className="w-full justify-start gap-2"
+          onClick={() => openCreateDialog()}
+        >
+          <HugeiconsIcon icon={Add01Icon} strokeWidth={2} className="size-4" />
           New Event
         </Button>
 
-        <Separator className="my-4" />
+        <Button
+          variant="outline"
+          className="w-full justify-start gap-2"
+          onClick={() => syncMutation.mutate()}
+          disabled={syncMutation.isPending}
+        >
+          <HugeiconsIcon
+            icon={RefreshIcon}
+            strokeWidth={2}
+            className={cn("size-4", syncMutation.isPending && "animate-spin")}
+          />
+          {syncMutation.isPending ? "Syncing…" : "Sync Calendar"}
+        </Button>
+
+        <Separator />
+
+        {/* Mini month calendar */}
+        <MiniCalendar
+          currentDate={currentDate}
+          onSelectDay={(day) => { setCurrentDate(day); setView("day") }}
+        />
+
+        <Separator />
 
         <div>
           <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -45,181 +275,829 @@ export function CalendarDashboard() {
               <span className="size-2 rounded-full bg-sky-500" />
               Google Calendar
             </div>
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <span className="size-2 rounded-full bg-emerald-500" />
-              Workspace
-            </div>
           </div>
         </div>
 
-        <Separator className="my-4" />
+        <Separator />
 
-        <div>
-          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Upcoming
-          </p>
-          <div className="space-y-2">
-            {upcoming.length === 0 ? (
-              <p className="text-sm leading-6 text-muted-foreground">
-                No cached events yet.
-              </p>
-            ) : (
-              upcoming.map((event) => (
-                <div key={event.id} className="rounded-md border bg-background p-2">
-                  <p className="truncate text-sm font-medium">{event.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {event.day} · {event.time}
-                  </p>
-                </div>
-              ))
-            )}
-          </div>
+        <div className="text-xs text-muted-foreground space-y-1">
+          <p className="font-medium mb-1">Shortcuts</p>
+          <p><kbd className="font-mono">n</kbd> New event</p>
+          <p><kbd className="font-mono">t</kbd> Today</p>
+          <p><kbd className="font-mono">w/m/d</kbd> Change view</p>
+          <p><kbd className="font-mono">←/→</kbd> Navigate</p>
+          <p><kbd className="font-mono">Del</kbd> Delete selected</p>
         </div>
       </aside>
 
-      <main className="min-h-0">
-        <div className="flex h-12 items-center justify-between border-b px-4">
-          <div>
-            <h1 className="text-sm font-semibold">Calendar</h1>
-            <p className="text-xs text-muted-foreground">
-              {events.length} cached events
-            </p>
+      {/* ── Main ── */}
+      <main className="flex min-h-0 flex-col">
+        {/* Header bar */}
+        <div className="flex h-12 shrink-0 items-center justify-between border-b px-4">
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setCurrentDate(new Date())}>
+              Today
+            </Button>
+            <Button variant="ghost" size="icon" className="size-8" onClick={() => navigate(-1)}>
+              <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} className="size-4" />
+            </Button>
+            <Button variant="ghost" size="icon" className="size-8" onClick={() => navigate(1)}>
+              <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-4" />
+            </Button>
+            <span className="text-sm font-semibold">{headerLabel()}</span>
           </div>
-          <Badge variant="outline" className="font-mono">
-            googlecalendar cache
-          </Badge>
+
+          <div className="flex items-center gap-1">
+            {(["day", "week", "month"] as ViewMode[]).map((v) => (
+              <Button
+                key={v}
+                variant={view === v ? "secondary" : "ghost"}
+                size="sm"
+                className="capitalize"
+                onClick={() => setView(v)}
+              >
+                {v}
+              </Button>
+            ))}
+          </div>
         </div>
 
+        {/* Calendar view */}
         {eventsQuery.isPending ? (
-          <CalendarState
-            title="Loading cached calendar"
-            detail="Reading Google Calendar events from Corsair cache."
-          />
+          <CalendarState title="Loading…" detail="Fetching events from cache." />
         ) : eventsQuery.isError ? (
-          <CalendarState
-            title="Could not load calendar"
-            detail="The calendar API returned an error while reading Corsair cache."
+          <CalendarState title="Error" detail="Could not load calendar events." />
+        ) : view === "week" ? (
+          <WeekView
+            days={weekDays}
+            events={events}
+            selectedEvent={selectedEvent}
+            onSelectEvent={setSelectedEvent}
+            onClickSlot={(day, hour) => {
+              const d = new Date(day)
+              d.setHours(hour, 0, 0, 0)
+              openCreateDialog(d.toISOString())
+            }}
           />
-        ) : events.length === 0 ? (
-          <CalendarState
-            title="No cached calendar events yet"
-            detail="Connect Google Calendar and run Corsair backfill or wait for webhooks to populate corsair_entities."
+        ) : view === "day" ? (
+          <DayView
+            day={currentDate}
+            events={events}
+            selectedEvent={selectedEvent}
+            onSelectEvent={setSelectedEvent}
+            onClickSlot={(day, hour) => {
+              const d = new Date(day)
+              d.setHours(hour, 0, 0, 0)
+              openCreateDialog(d.toISOString())
+            }}
           />
         ) : (
-          <div className="grid h-[calc(100svh-6.5rem)] lg:grid-cols-[1fr_380px]">
-            <ScrollArea className="border-r">
-              <div className="grid min-h-full grid-cols-[72px_1fr]">
-                <div className="border-r bg-muted/20">
-                  {Array.from({ length: 12 }).map((_, index) => (
-                    <div
-                      key={index}
-                      className="h-24 border-b px-2 py-2 text-right font-mono text-xs text-muted-foreground"
-                    >
-                      {String(index + 8).padStart(2, "0")}:00
-                    </div>
-                  ))}
-                </div>
-                <div className="p-3">
-                  <div className="grid gap-3">
-                    {events.map((event) => (
-                      <article
-                        key={event.id}
-                        className="rounded-lg border border-sky-500/25 bg-sky-500/10 p-3"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium">{event.title}</p>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {event.day} · {event.time}
-                            </p>
-                          </div>
-                          <Badge variant="secondary">{event.calendar}</Badge>
-                        </div>
-                        {event.description ? (
-                          <p className="mt-3 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                            {event.description}
-                          </p>
-                        ) : null}
-                      </article>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </ScrollArea>
-
-            <aside className="hidden p-4 lg:block">
-              {selected ? (
-                <div className="rounded-lg border bg-card p-4">
-                  <Badge variant="outline">{selected.day}</Badge>
-                  <h2 className="mt-4 text-xl font-semibold tracking-normal">
-                    {selected.title}
-                  </h2>
-                  <p className="mt-2 text-sm text-muted-foreground">
-                    {selected.time}
-                  </p>
-
-                  <div className="mt-5 space-y-3 text-sm">
-                    {selected.location ? (
-                      <Detail icon={Location01Icon}>{selected.location}</Detail>
-                    ) : null}
-                    {selected.meetingLink ? (
-                      <Detail icon={Link04Icon}>{selected.meetingLink}</Detail>
-                    ) : null}
-                    <Detail icon={UserGroupIcon}>
-                      {selected.attendees.length > 0
-                        ? selected.attendees.join(", ")
-                        : "No attendees cached"}
-                    </Detail>
-                  </div>
-                </div>
-              ) : null}
-            </aside>
-          </div>
+          <MonthView
+            days={monthDays}
+            currentDate={currentDate}
+            events={events}
+            selectedEvent={selectedEvent}
+            onSelectEvent={setSelectedEvent}
+            onClickDay={(day) => { setCurrentDate(day); setView("day") }}
+          />
         )}
       </main>
+
+      {/* ── Event detail panel ── */}
+      {selectedEvent && (
+        <EventDetailPanel
+          event={selectedEvent}
+          onClose={() => setSelectedEvent(null)}
+          onEdit={() => openEditDialog(selectedEvent)}
+          onDelete={() => deleteMutation.mutate(selectedEvent.corsairId)}
+          isDeleting={deleteMutation.isPending}
+        />
+      )}
+
+      {/* ── Create / Edit dialog ── */}
+      <EventDialog
+        open={dialogState.open}
+        mode={dialogState.mode}
+        event={dialogState.event}
+        prefillStart={dialogState.prefillStart}
+        onClose={() => setDialogState({ open: false, mode: "create" })}
+        onSaved={() => {
+          void qc.invalidateQueries({ queryKey: ["calendar", "events"] })
+          setDialogState({ open: false, mode: "create" })
+        }}
+      />
     </div>
   )
 }
 
-async function fetchCalendarEvents(): Promise<CalendarEvent[]> {
-  const response = await fetch("/api/calendar/events")
+// ─── Week view ───────────────────────────────────────────────────────────────
 
-  if (!response.ok) {
-    throw new Error("Unable to fetch calendar events")
-  }
+function WeekView({
+  days,
+  events,
+  selectedEvent,
+  onSelectEvent,
+  onClickSlot,
+}: {
+  days: Date[]
+  events: CalendarEvent[]
+  selectedEvent: CalendarEvent | null
+  onSelectEvent: (e: CalendarEvent) => void
+  onClickSlot: (day: Date, hour: number) => void
+}) {
+  return (
+    <div className="flex min-h-0 flex-col flex-1">
+      {/* Day header row */}
+      <div className="grid shrink-0 border-b" style={{ gridTemplateColumns: "56px repeat(7, 1fr)" }}>
+        <div className="border-r" />
+        {days.map((day) => (
+          <div
+            key={day.toISOString()}
+            className={cn(
+              "flex flex-col items-center py-2 text-xs border-r last:border-r-0",
+              isToday(day) && "text-sky-500"
+            )}
+          >
+            <span className="text-muted-foreground uppercase">{format(day, "EEE")}</span>
+            <span
+              className={cn(
+                "mt-0.5 flex h-6 w-6 items-center justify-center rounded-full font-semibold text-sm",
+                isToday(day) && "bg-sky-500 text-white"
+              )}
+            >
+              {format(day, "d")}
+            </span>
+          </div>
+        ))}
+      </div>
 
-  const payload = (await response.json()) as { events?: CalendarEvent[] }
-  return payload.events ?? []
+      {/* Scrollable time grid */}
+      <ScrollArea className="flex-1">
+        <div className="grid" style={{ gridTemplateColumns: "56px repeat(7, 1fr)" }}>
+          {/* Time gutter */}
+          <div className="border-r">
+            {HOURS.map((h) => (
+              <div
+                key={h}
+                className="flex items-start justify-end pr-2 text-[10px] text-muted-foreground"
+                style={{ height: HOUR_HEIGHT }}
+              >
+                <span className="-mt-2">{h === 12 ? "12pm" : h > 12 ? `${h - 12}pm` : `${h}am`}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Day columns */}
+          {days.map((day) => (
+            <DayColumn
+              key={day.toISOString()}
+              day={day}
+              events={eventsForDay(events, day)}
+              selectedEvent={selectedEvent}
+              onSelectEvent={onSelectEvent}
+              onClickSlot={onClickSlot}
+            />
+          ))}
+        </div>
+      </ScrollArea>
+    </div>
+  )
 }
 
-function CalendarState({ title, detail }: { title: string; detail: string }) {
+// ─── Day view ────────────────────────────────────────────────────────────────
+
+function DayView({
+  day,
+  events,
+  selectedEvent,
+  onSelectEvent,
+  onClickSlot,
+}: {
+  day: Date
+  events: CalendarEvent[]
+  selectedEvent: CalendarEvent | null
+  onSelectEvent: (e: CalendarEvent) => void
+  onClickSlot: (day: Date, hour: number) => void
+}) {
   return (
-    <div className="flex h-[calc(100svh-6.5rem)] items-center justify-center p-6 text-center">
-      <div>
-        <h2 className="text-lg font-semibold">{title}</h2>
-        <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-          {detail}
-        </p>
+    <div className="flex min-h-0 flex-col flex-1">
+      <div className="grid shrink-0 border-b" style={{ gridTemplateColumns: "56px 1fr" }}>
+        <div className="border-r" />
+        <div className={cn("flex flex-col items-center py-2 text-xs", isToday(day) && "text-sky-500")}>
+          <span className="text-muted-foreground uppercase">{format(day, "EEEE")}</span>
+          <span
+            className={cn(
+              "mt-0.5 flex h-6 w-6 items-center justify-center rounded-full font-semibold text-sm",
+              isToday(day) && "bg-sky-500 text-white"
+            )}
+          >
+            {format(day, "d")}
+          </span>
+        </div>
+      </div>
+      <ScrollArea className="flex-1">
+        <div className="grid" style={{ gridTemplateColumns: "56px 1fr" }}>
+          <div className="border-r">
+            {HOURS.map((h) => (
+              <div
+                key={h}
+                className="flex items-start justify-end pr-2 text-[10px] text-muted-foreground"
+                style={{ height: HOUR_HEIGHT }}
+              >
+                <span className="-mt-2">{h === 12 ? "12pm" : h > 12 ? `${h - 12}pm` : `${h}am`}</span>
+              </div>
+            ))}
+          </div>
+          <DayColumn
+            day={day}
+            events={eventsForDay(events, day)}
+            selectedEvent={selectedEvent}
+            onSelectEvent={onSelectEvent}
+            onClickSlot={onClickSlot}
+          />
+        </div>
+      </ScrollArea>
+    </div>
+  )
+}
+
+// ─── Day column (shared by week/day) ─────────────────────────────────────────
+
+function DayColumn({
+  day,
+  events,
+  selectedEvent,
+  onSelectEvent,
+  onClickSlot,
+}: {
+  day: Date
+  events: CalendarEvent[]
+  selectedEvent: CalendarEvent | null
+  onSelectEvent: (e: CalendarEvent) => void
+  onClickSlot: (day: Date, hour: number) => void
+}) {
+  const timedEvents = events.filter((e) => !isAllDay(e))
+  const columns = layoutColumns(timedEvents)
+
+  return (
+    <div
+      className="relative border-r last:border-r-0"
+      style={{ height: TOTAL_HEIGHT }}
+    >
+      {/* Hour grid lines + click targets */}
+      {HOURS.map((h) => (
+        <div
+          key={h}
+          className="absolute inset-x-0 border-b border-border/50 cursor-pointer hover:bg-muted/30 transition-colors"
+          style={{ top: (h - START_HOUR) * HOUR_HEIGHT, height: HOUR_HEIGHT }}
+          onClick={() => onClickSlot(day, h)}
+        />
+      ))}
+
+      {/* Events */}
+      {columns.map(({ event, col, totalCols }) => {
+        const top = eventTop(event)
+        const height = Math.max(22, eventHeight(event))
+        const width = `calc(${100 / totalCols}% - 4px)`
+        const left = `calc(${(col / totalCols) * 100}% + 2px)`
+        const isSelected = selectedEvent?.id === event.id
+
+        return (
+          <button
+            key={event.id}
+            className={cn(
+              "absolute rounded-md px-1.5 py-0.5 text-left text-xs font-medium transition-all overflow-hidden",
+              "bg-sky-500/20 text-sky-700 dark:text-sky-300 border border-sky-500/30",
+              "hover:bg-sky-500/30 hover:border-sky-500/60",
+              isSelected && "ring-2 ring-sky-500 bg-sky-500/30"
+            )}
+            style={{ top, height, width, left }}
+            onClick={(e) => { e.stopPropagation(); onSelectEvent(event) }}
+          >
+            <p className="truncate leading-tight">{event.title}</p>
+            {height > 40 && (
+              <p className="truncate text-[10px] opacity-75 mt-0.5">{event.time}</p>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// Simple column layout to avoid overlapping events
+function layoutColumns(events: CalendarEvent[]) {
+  const result: { event: CalendarEvent; col: number; totalCols: number }[] = []
+  const groups: CalendarEvent[][] = []
+
+  for (const event of events) {
+    const start = event.startsAt ? new Date(event.startsAt).getTime() : 0
+    const end = event.endsAt ? new Date(event.endsAt).getTime() : start + 3600000
+    let placed = false
+
+    for (const group of groups) {
+      const overlaps = group.some((g) => {
+        const gs = g.startsAt ? new Date(g.startsAt).getTime() : 0
+        const ge = g.endsAt ? new Date(g.endsAt).getTime() : gs + 3600000
+        return start < ge && end > gs
+      })
+      if (overlaps) {
+        group.push(event)
+        placed = true
+        break
+      }
+    }
+
+    if (!placed) groups.push([event])
+  }
+
+  for (const group of groups) {
+    for (let i = 0; i < group.length; i++) {
+      result.push({ event: group[i]!, col: i, totalCols: group.length })
+    }
+  }
+
+  return result
+}
+
+// ─── Month view ───────────────────────────────────────────────────────────────
+
+function MonthView({
+  days,
+  currentDate,
+  events,
+  selectedEvent,
+  onSelectEvent,
+  onClickDay,
+}: {
+  days: Date[]
+  currentDate: Date
+  events: CalendarEvent[]
+  selectedEvent: CalendarEvent | null
+  onSelectEvent: (e: CalendarEvent) => void
+  onClickDay: (day: Date) => void
+}) {
+  const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+  return (
+    <div className="flex flex-1 flex-col min-h-0">
+      {/* Day name headers */}
+      <div className="grid grid-cols-7 border-b shrink-0">
+        {DAY_NAMES.map((name) => (
+          <div key={name} className="py-2 text-center text-xs font-medium text-muted-foreground border-r last:border-r-0">
+            {name}
+          </div>
+        ))}
+      </div>
+
+      {/* Day cells */}
+      <div className="grid grid-cols-7 flex-1" style={{ gridAutoRows: "1fr" }}>
+        {days.map((day) => {
+          const dayEvents = eventsForDay(events, day)
+          const inMonth = isSameMonth(day, currentDate)
+
+          return (
+            <div
+              key={day.toISOString()}
+              className={cn(
+                "border-b border-r last:border-r-0 p-1 min-h-[100px] cursor-pointer hover:bg-muted/30 transition-colors",
+                !inMonth && "opacity-40"
+              )}
+              onClick={() => onClickDay(day)}
+            >
+              <span
+                className={cn(
+                  "flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium mb-1",
+                  isToday(day) && "bg-sky-500 text-white"
+                )}
+              >
+                {format(day, "d")}
+              </span>
+              <div className="space-y-0.5">
+                {dayEvents.slice(0, 3).map((event) => (
+                  <button
+                    key={event.id}
+                    className={cn(
+                      "w-full truncate rounded px-1 py-0.5 text-left text-[11px] font-medium leading-tight",
+                      "bg-sky-500/20 text-sky-700 dark:text-sky-300 hover:bg-sky-500/40 transition-colors",
+                      selectedEvent?.id === event.id && "ring-1 ring-sky-500"
+                    )}
+                    onClick={(e) => { e.stopPropagation(); onSelectEvent(event) }}
+                  >
+                    {event.title}
+                  </button>
+                ))}
+                {dayEvents.length > 3 && (
+                  <p className="text-[10px] text-muted-foreground pl-1">+{dayEvents.length - 3} more</p>
+                )}
+              </div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
 }
 
-function Detail({
+// ─── Mini calendar ────────────────────────────────────────────────────────────
+
+function MiniCalendar({
+  currentDate,
+  onSelectDay,
+}: {
+  currentDate: Date
+  onSelectDay: (day: Date) => void
+}) {
+  const [miniDate, setMiniDate] = React.useState(currentDate)
+  const start = startOfWeek(startOfMonth(miniDate), { weekStartsOn: 1 })
+  const end = endOfWeek(endOfMonth(miniDate), { weekStartsOn: 1 })
+  const days = eachDayOfInterval({ start, end })
+
+  return (
+    <div className="text-xs">
+      <div className="flex items-center justify-between mb-2">
+        <button onClick={() => setMiniDate((d) => subMonths(d, 1))} className="p-0.5 hover:text-foreground text-muted-foreground">
+          <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} className="size-3" />
+        </button>
+        <span className="font-medium text-xs">{format(miniDate, "MMMM yyyy")}</span>
+        <button onClick={() => setMiniDate((d) => addMonths(d, 1))} className="p-0.5 hover:text-foreground text-muted-foreground">
+          <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-3" />
+        </button>
+      </div>
+      <div className="grid grid-cols-7 text-center mb-1">
+        {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
+          <span key={i} className="text-muted-foreground font-medium">{d}</span>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 text-center gap-y-0.5">
+        {days.map((day) => (
+          <button
+            key={day.toISOString()}
+            className={cn(
+              "h-6 w-6 mx-auto rounded-full flex items-center justify-center hover:bg-muted transition-colors",
+              !isSameMonth(day, miniDate) && "opacity-30",
+              isToday(day) && "bg-sky-500 text-white hover:bg-sky-600",
+              isSameDay(day, currentDate) && !isToday(day) && "bg-muted font-semibold"
+            )}
+            onClick={() => onSelectDay(day)}
+          >
+            {format(day, "d")}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Event detail panel ───────────────────────────────────────────────────────
+
+function EventDetailPanel({
+  event,
+  onClose,
+  onEdit,
+  onDelete,
+  isDeleting,
+}: {
+  event: CalendarEvent
+  onClose: () => void
+  onEdit: () => void
+  onDelete: () => void
+  isDeleting: boolean
+}) {
+  return (
+    <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l bg-background shadow-xl lg:inset-y-[3.5rem]">
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <span className="text-sm font-semibold">Event Details</span>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" className="size-7" onClick={onEdit}>
+            <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-destructive hover:text-destructive"
+            onClick={onDelete}
+            disabled={isDeleting}
+          >
+            <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-4" />
+          </Button>
+          <Button variant="ghost" size="icon" className="size-7" onClick={onClose}>
+            <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-4" />
+          </Button>
+        </div>
+      </div>
+
+      <ScrollArea className="flex-1 px-4 py-4">
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold leading-snug">{event.title}</h2>
+            <Badge variant="outline" className="mt-1 text-xs">{event.calendar}</Badge>
+          </div>
+
+          <Separator />
+
+          <DetailRow icon={Calendar03Icon}>
+            <span>{event.day}</span>
+          </DetailRow>
+
+          <DetailRow icon={Clock01Icon}>
+            <span>{event.time}</span>
+          </DetailRow>
+
+          {event.location && (
+            <DetailRow icon={Location01Icon}>
+              <span>{event.location}</span>
+            </DetailRow>
+          )}
+
+          {event.meetingLink && (
+            <DetailRow icon={Link04Icon}>
+              <a
+                href={event.meetingLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sky-500 underline-offset-4 hover:underline break-all"
+              >
+                Join meeting
+              </a>
+            </DetailRow>
+          )}
+
+          <DetailRow icon={UserGroupIcon}>
+            <span>
+              {event.attendees.length > 0 ? event.attendees.join(", ") : "No attendees"}
+            </span>
+          </DetailRow>
+
+          {event.description && (
+            <>
+              <Separator />
+              <p className="text-sm leading-6 text-muted-foreground whitespace-pre-wrap">
+                {event.description}
+              </p>
+            </>
+          )}
+        </div>
+      </ScrollArea>
+    </div>
+  )
+}
+
+function DetailRow({
   icon,
   children,
 }: {
-  icon: IconSvgElement
-  children: ReactNode
+  icon: React.ComponentProps<typeof HugeiconsIcon>["icon"]
+  children: React.ReactNode
 }) {
   return (
-    <div className="flex items-start gap-2">
-      <HugeiconsIcon
-        icon={icon}
-        strokeWidth={2}
-        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-      />
-      <span className="min-w-0 wrap-break-word">{children}</span>
+    <div className="flex items-start gap-3 text-sm">
+      <HugeiconsIcon icon={icon} strokeWidth={2} className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 break-words">{children}</span>
+    </div>
+  )
+}
+
+// ─── Create / Edit dialog ─────────────────────────────────────────────────────
+
+type EventForm = {
+  title: string
+  startDatetime: string
+  endDatetime: string
+  location: string
+  description: string
+  attendees: string
+  allDay: boolean
+}
+
+function EventDialog({
+  open,
+  mode,
+  event,
+  prefillStart,
+  onClose,
+  onSaved,
+}: {
+  open: boolean
+  mode: "create" | "edit"
+  event?: CalendarEvent
+  prefillStart?: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const defaultStart = React.useMemo(() => {
+    if (prefillStart) return toLocalDatetimeInput(prefillStart)
+    const d = new Date()
+    d.setMinutes(0, 0, 0)
+    d.setHours(d.getHours() + 1)
+    return toLocalDatetimeInput(d.toISOString())
+  }, [prefillStart])
+
+  const defaultEnd = React.useMemo(() => {
+    if (prefillStart) {
+      const d = new Date(prefillStart)
+      d.setHours(d.getHours() + 1)
+      return toLocalDatetimeInput(d.toISOString())
+    }
+    const d = new Date()
+    d.setMinutes(0, 0, 0)
+    d.setHours(d.getHours() + 2)
+    return toLocalDatetimeInput(d.toISOString())
+  }, [prefillStart])
+
+  const [form, setForm] = React.useState<EventForm>({
+    title: "",
+    startDatetime: defaultStart,
+    endDatetime: defaultEnd,
+    location: "",
+    description: "",
+    attendees: "",
+    allDay: false,
+  })
+
+  // Populate form from event when editing
+  React.useEffect(() => {
+    if (!open) return
+    if (mode === "edit" && event) {
+      setForm({
+        title: event.title,
+        startDatetime: toLocalDatetimeInput(event.startsAt),
+        endDatetime: toLocalDatetimeInput(event.endsAt),
+        location: event.location ?? "",
+        description: event.description ?? "",
+        attendees: event.attendees.join(", "),
+        allDay: false,
+      })
+    } else {
+      setForm({
+        title: "",
+        startDatetime: defaultStart,
+        endDatetime: defaultEnd,
+        location: "",
+        description: "",
+        attendees: "",
+        allDay: false,
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, mode])
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const attendees = form.attendees
+        .split(/[,;\s]+/)
+        .map((a) => a.trim())
+        .filter((a) => a.includes("@"))
+        .map((email) => ({ email }))
+
+      const eventPayload = {
+        summary: form.title,
+        location: form.location || undefined,
+        description: form.description || undefined,
+        attendees: attendees.length > 0 ? attendees : undefined,
+        start: form.allDay
+          ? { date: form.startDatetime.slice(0, 10) }
+          : { dateTime: localDatetimeToISO(form.startDatetime), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+        end: form.allDay
+          ? { date: form.endDatetime.slice(0, 10) }
+          : { dateTime: localDatetimeToISO(form.endDatetime), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+      }
+
+      if (mode === "edit" && event) {
+        await calendarAction({ action: "update", eventId: event.corsairId, event: eventPayload })
+      } else {
+        await calendarAction({ action: "create", event: eventPayload })
+      }
+    },
+    onSuccess: () => {
+      toast.success(mode === "edit" ? "Event updated" : "Event created")
+      onSaved()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  function field(key: keyof EventForm, value: string | boolean) {
+    setForm((f) => ({ ...f, [key]: value }))
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{mode === "edit" ? "Edit Event" : "New Event"}</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="evt-title">Title</Label>
+            <Input
+              id="evt-title"
+              placeholder="Event title"
+              value={form.title}
+              onChange={(e) => field("title", e.target.value)}
+              autoFocus
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="evt-allday"
+              checked={form.allDay}
+              onChange={(e) => field("allDay", e.target.checked)}
+              className="rounded"
+            />
+            <Label htmlFor="evt-allday" className="cursor-pointer">All day</Label>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="evt-start">{form.allDay ? "Start date" : "Start"}</Label>
+              <Input
+                id="evt-start"
+                type={form.allDay ? "date" : "datetime-local"}
+                value={form.allDay ? form.startDatetime.slice(0, 10) : form.startDatetime}
+                onChange={(e) => field("startDatetime", e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="evt-end">{form.allDay ? "End date" : "End"}</Label>
+              <Input
+                id="evt-end"
+                type={form.allDay ? "date" : "datetime-local"}
+                value={form.allDay ? form.endDatetime.slice(0, 10) : form.endDatetime}
+                onChange={(e) => field("endDatetime", e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="evt-location">Location</Label>
+            <Input
+              id="evt-location"
+              placeholder="Add location"
+              value={form.location}
+              onChange={(e) => field("location", e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="evt-attendees">Guests</Label>
+            <Input
+              id="evt-attendees"
+              placeholder="email@example.com, ..."
+              value={form.attendees}
+              onChange={(e) => field("attendees", e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="evt-desc">Description</Label>
+            <Textarea
+              id="evt-desc"
+              placeholder="Add description"
+              value={form.description}
+              onChange={(e) => field("description", e.target.value)}
+              rows={3}
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saveMutation.isPending}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => saveMutation.mutate()}
+            disabled={saveMutation.isPending || !form.title.trim()}
+          >
+            {saveMutation.isPending ? (
+              <span className="flex items-center gap-2">
+                <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} className="size-4 animate-spin" />
+                Saving…
+              </span>
+            ) : (
+              <span className="flex items-center gap-2">
+                <HugeiconsIcon icon={CheckmarkCircle02Icon} strokeWidth={2} className="size-4" />
+                {mode === "edit" ? "Save changes" : "Create event"}
+              </span>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Empty state ──────────────────────────────────────────────────────────────
+
+function CalendarState({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="flex flex-1 items-center justify-center p-6 text-center">
+      <div>
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">{detail}</p>
+      </div>
     </div>
   )
 }
