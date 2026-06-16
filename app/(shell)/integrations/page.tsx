@@ -1,11 +1,14 @@
-import { PlaceholderSurface } from "@/components/shell/placeholder-surface"
+import { Suspense } from "react"
+
+import {
+  IntegrationSkeleton,
+  IntegrationsDashboard,
+} from "@/components/integrations/integrations-dashboard"
 
 export default function IntegrationsPage() {
   return (
-    <PlaceholderSurface
-      title="Integrations"
-      eyebrow="Phase 1"
-      description="Gmail, Google Calendar, and future GitHub, Slack, and Linear connections will be managed through Corsair here."
-    />
+    <Suspense fallback={<IntegrationSkeleton />}>
+      <IntegrationsDashboard />
+    </Suspense>
   )
 }

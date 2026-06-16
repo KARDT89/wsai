@@ -1,0 +1,251 @@
+.
+├── AGENTS.md
+├── app
+│   ├── api
+│   │   ├── auth
+│   │   │   └── [...all]
+│   │   │       └── route.ts
+│   │   ├── calendar
+│   │   │   └── events
+│   │   │       └── route.ts
+│   │   └── mail
+│   │       └── threads
+│   │           └── route.ts
+│   ├── (auth)
+│   │   ├── login
+│   │   │   └── page.tsx
+│   │   └── signup
+│   │       └── page.tsx
+│   ├── dashboard
+│   │   ├── data.json
+│   │   └── page.tsx
+│   ├── favicon.ico
+│   ├── globals.css
+│   ├── layout.tsx
+│   ├── page.tsx
+│   └── (shell)
+│       ├── agent
+│       │   └── page.tsx
+│       ├── approvals
+│       │   └── page.tsx
+│       ├── calendar
+│       │   └── page.tsx
+│       ├── integrations
+│       │   └── page.tsx
+│       ├── layout.tsx
+│       ├── mail
+│       │   └── page.tsx
+│       └── settings
+│           └── page.tsx
+├── CLAUDE.md
+├── components
+│   ├── app-sidebar.tsx
+│   ├── calendar
+│   │   └── calendar-dashboard.tsx
+│   ├── chart-area-interactive.tsx
+│   ├── data-table.tsx
+│   ├── login-form.tsx
+│   ├── mail
+│   │   └── mail-workspace.tsx
+│   ├── nav-documents.tsx
+│   ├── nav-main.tsx
+│   ├── nav-secondary.tsx
+│   ├── nav-user.tsx
+│   ├── section-cards.tsx
+│   ├── shell
+│   │   ├── app-shell.tsx
+│   │   └── placeholder-surface.tsx
+│   ├── signup-form.tsx
+│   ├── site-header.tsx
+│   ├── theme-toggle.tsx
+│   └── ui
+│       ├── accordion.tsx
+│       ├── alert-dialog.tsx
+│       ├── alert.tsx
+│       ├── aspect-ratio.tsx
+│       ├── avatar.tsx
+│       ├── badge.tsx
+│       ├── breadcrumb.tsx
+│       ├── button-group.tsx
+│       ├── button.tsx
+│       ├── calendar.tsx
+│       ├── card.tsx
+│       ├── carousel.tsx
+│       ├── chart.tsx
+│       ├── checkbox.tsx
+│       ├── collapsible.tsx
+│       ├── combobox.tsx
+│       ├── command.tsx
+│       ├── context-menu.tsx
+│       ├── dialog.tsx
+│       ├── direction.tsx
+│       ├── drawer.tsx
+│       ├── dropdown-menu.tsx
+│       ├── empty.tsx
+│       ├── field.tsx
+│       ├── hover-card.tsx
+│       ├── input-group.tsx
+│       ├── input-otp.tsx
+│       ├── input.tsx
+│       ├── item.tsx
+│       ├── kbd.tsx
+│       ├── label.tsx
+│       ├── menubar.tsx
+│       ├── native-select.tsx
+│       ├── navigation-menu.tsx
+│       ├── pagination.tsx
+│       ├── popover.tsx
+│       ├── progress.tsx
+│       ├── radio-group.tsx
+│       ├── resizable.tsx
+│       ├── scroll-area.tsx
+│       ├── select.tsx
+│       ├── separator.tsx
+│       ├── sheet.tsx
+│       ├── sidebar.tsx
+│       ├── skeleton.tsx
+│       ├── slider.tsx
+│       ├── sonner.tsx
+│       ├── spinner.tsx
+│       ├── switch.tsx
+│       ├── table.tsx
+│       ├── tabs.tsx
+│       ├── textarea.tsx
+│       ├── toggle-group.tsx
+│       ├── toggle.tsx
+│       └── tooltip.tsx
+├── components.json
+├── docs
+│   ├── plan.md
+│   └── product-plan.md
+├── eslint.config.mjs
+├── features
+│   ├── auth
+│   │   ├── actions
+│   │   │   └── index.ts
+│   │   └── utils
+│   │       ├── auth-proxy.ts
+│   │       └── index.ts
+│   └── corsair
+├── hooks
+│   └── use-mobile.ts
+├── lib
+│   ├── auth-client.ts
+│   ├── auth.ts
+│   ├── corsair-cache.ts
+│   ├── db.ts
+│   ├── generated
+│   │   └── prisma
+│   │       ├── browser.ts
+│   │       ├── client.ts
+│   │       ├── commonInputTypes.ts
+│   │       ├── enums.ts
+│   │       ├── internal
+│   │       │   ├── class.ts
+│   │       │   ├── prismaNamespaceBrowser.ts
+│   │       │   └── prismaNamespace.ts
+│   │       ├── models
+│   │       │   ├── Account.ts
+│   │       │   ├── CorsairAccount.ts
+│   │       │   ├── CorsairEntity.ts
+│   │       │   ├── CorsairEvent.ts
+│   │       │   ├── CorsairIntegration.ts
+│   │       │   ├── Session.ts
+│   │       │   ├── User.ts
+│   │       │   └── Verification.ts
+│   │       └── models.ts
+│   ├── session.ts
+│   ├── utils.ts
+│   └── workspace-types.ts
+├── next.config.ts
+├── next-env.d.ts
+├── node_modules
+│   ├── @base-ui
+│   │   └── react -> ../.pnpm/@base-ui+react@1.5.0_@date-fns+tz@1.5.0_@types+react@19.2.17_date-fns@4.4.0_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/@base-ui/react
+│   ├── better-auth -> .pnpm/better-auth@1.6.18_@opentelemetry+api@1.9.1_@prisma+client@7.8.0_prisma@7.8.0_@types+re_696399820dff60284fd41f4fb2a67a81/node_modules/better-auth
+│   ├── class-variance-authority -> .pnpm/class-variance-authority@0.7.1/node_modules/class-variance-authority
+│   ├── clsx -> .pnpm/clsx@2.1.1/node_modules/clsx
+│   ├── cmdk -> .pnpm/cmdk@1.1.1_@types+react-dom@19.2.3_@types+react@19.2.17__@types+react@19.2.17_react-dom_021b1ee66c69ccec643708ef9295c3be/node_modules/cmdk
+│   ├── corsair -> .pnpm/corsair@0.1.76_postgres@3.4.7/node_modules/corsair
+│   ├── @corsair-dev
+│   │   ├── github -> ../.pnpm/@corsair-dev+github@0.1.10_@types+node@20.19.43_corsair@0.1.76_postgres@3.4.7__zod@4.4.3/node_modules/@corsair-dev/github
+│   │   ├── gmail -> ../.pnpm/@corsair-dev+gmail@0.1.4_@types+node@20.19.43_corsair@0.1.76_postgres@3.4.7__zod@4.4.3/node_modules/@corsair-dev/gmail
+│   │   ├── googlecalendar -> ../.pnpm/@corsair-dev+googlecalendar@0.1.4_@types+node@20.19.43_corsair@0.1.76_postgres@3.4.7__zod@4.4.3/node_modules/@corsair-dev/googlecalendar
+│   │   ├── linear -> ../.pnpm/@corsair-dev+linear@0.1.4_@types+node@20.19.43_corsair@0.1.76_postgres@3.4.7__zod@4.4.3/node_modules/@corsair-dev/linear
+│   │   └── slack -> ../.pnpm/@corsair-dev+slack@0.1.4_@types+node@20.19.43_corsair@0.1.76_postgres@3.4.7__zod@4.4.3/node_modules/@corsair-dev/slack
+│   ├── date-fns -> .pnpm/date-fns@4.4.0/node_modules/date-fns
+│   ├── @dnd-kit
+│   │   ├── core -> ../.pnpm/@dnd-kit+core@6.3.1_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/@dnd-kit/core
+│   │   ├── modifiers -> ../.pnpm/@dnd-kit+modifiers@9.0.0_@dnd-kit+core@6.3.1_react-dom@19.2.4_react@19.2.4__react@19.2.4__react@19.2.4/node_modules/@dnd-kit/modifiers
+│   │   ├── sortable -> ../.pnpm/@dnd-kit+sortable@10.0.0_@dnd-kit+core@6.3.1_react-dom@19.2.4_react@19.2.4__react@19.2.4__react@19.2.4/node_modules/@dnd-kit/sortable
+│   │   └── utilities -> ../.pnpm/@dnd-kit+utilities@3.2.2_react@19.2.4/node_modules/@dnd-kit/utilities
+│   ├── dotenv -> .pnpm/dotenv@17.4.2/node_modules/dotenv
+│   ├── embla-carousel-react -> .pnpm/embla-carousel-react@8.6.0_react@19.2.4/node_modules/embla-carousel-react
+│   ├── eslint -> .pnpm/eslint@9.39.4_jiti@2.7.0/node_modules/eslint
+│   ├── eslint-config-next -> .pnpm/eslint-config-next@16.2.9_@typescript-eslint+parser@8.61.0_eslint@9.39.4_jiti@2.7.0__ty_06d67aaf5342010b85a16a8778ca2409/node_modules/eslint-config-next
+│   ├── @hugeicons
+│   │   ├── core-free-icons -> ../.pnpm/@hugeicons+core-free-icons@4.2.0/node_modules/@hugeicons/core-free-icons
+│   │   └── react -> ../.pnpm/@hugeicons+react@1.1.6_react@19.2.4/node_modules/@hugeicons/react
+│   ├── inngest -> .pnpm/inngest@4.5.1_@opentelemetry+core@2.8.0_@opentelemetry+api@1.9.1__express@5.2.1_hono@4._5f05e319bdfbb4e50c3859816908cf25/node_modules/inngest
+│   ├── input-otp -> .pnpm/input-otp@1.4.2_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/input-otp
+│   ├── next -> .pnpm/next@16.2.9_@babel+core@7.29.7_@opentelemetry+api@1.9.1_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/next
+│   ├── next-themes -> .pnpm/next-themes@0.4.6_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/next-themes
+│   ├── pg -> .pnpm/pg@8.21.0/node_modules/pg
+│   ├── @phosphor-icons
+│   │   └── react -> ../.pnpm/@phosphor-icons+react@2.1.10_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/@phosphor-icons/react
+│   ├── @prisma
+│   │   ├── adapter-pg -> ../.pnpm/@prisma+adapter-pg@7.8.0/node_modules/@prisma/adapter-pg
+│   │   └── client -> ../.pnpm/@prisma+client@7.8.0_prisma@7.8.0_@types+react-dom@19.2.3_@types+react@19.2.17__@types+_12a6afd4e8168cdd815b06207f03ccf9/node_modules/@prisma/client
+│   ├── prisma -> .pnpm/prisma@7.8.0_@types+react-dom@19.2.3_@types+react@19.2.17__@types+react@19.2.17_react-d_c489d9c5f1db605159eb08681b366680/node_modules/prisma
+│   ├── radix-ui -> .pnpm/radix-ui@1.5.0_@types+react-dom@19.2.3_@types+react@19.2.17__@types+react@19.2.17_react_7fe38041621cd8bff198cc2a2529489d/node_modules/radix-ui
+│   ├── react -> .pnpm/react@19.2.4/node_modules/react
+│   ├── react-day-picker -> .pnpm/react-day-picker@10.0.1_@types+react@19.2.17_react@19.2.4/node_modules/react-day-picker
+│   ├── react-dom -> .pnpm/react-dom@19.2.4_react@19.2.4/node_modules/react-dom
+│   ├── react-hook-form -> .pnpm/react-hook-form@7.79.0_react@19.2.4/node_modules/react-hook-form
+│   ├── react-resizable-panels -> .pnpm/react-resizable-panels@4.11.2_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/react-resizable-panels
+│   ├── recharts -> .pnpm/recharts@3.8.0_@types+react@19.2.17_react-dom@19.2.4_react@19.2.4__react-is@18.3.1_react@19.2.4_redux@5.0.1/node_modules/recharts
+│   ├── shadcn -> .pnpm/shadcn@4.11.0_typescript@5.9.3/node_modules/shadcn
+│   ├── sonner -> .pnpm/sonner@2.0.7_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/sonner
+│   ├── @tailwindcss
+│   │   └── postcss -> ../.pnpm/@tailwindcss+postcss@4.3.1/node_modules/@tailwindcss/postcss
+│   ├── tailwindcss -> .pnpm/tailwindcss@4.3.1/node_modules/tailwindcss
+│   ├── tailwind-merge -> .pnpm/tailwind-merge@3.6.0/node_modules/tailwind-merge
+│   ├── @tanstack
+│   │   ├── react-query -> ../.pnpm/@tanstack+react-query@5.101.0_react@19.2.4/node_modules/@tanstack/react-query
+│   │   └── react-table -> ../.pnpm/@tanstack+react-table@8.21.3_react-dom@19.2.4_react@19.2.4__react@19.2.4/node_modules/@tanstack/react-table
+│   ├── tsx -> .pnpm/tsx@4.22.4/node_modules/tsx
+│   ├── tw-animate-css -> .pnpm/tw-animate-css@1.4.0/node_modules/tw-animate-css
+│   ├── @types
+│   │   ├── node -> ../.pnpm/@types+node@20.19.43/node_modules/@types/node
+│   │   ├── pg -> ../.pnpm/@types+pg@8.20.0/node_modules/@types/pg
+│   │   ├── react -> ../.pnpm/@types+react@19.2.17/node_modules/@types/react
+│   │   └── react-dom -> ../.pnpm/@types+react-dom@19.2.3_@types+react@19.2.17/node_modules/@types/react-dom
+│   ├── typescript -> .pnpm/typescript@5.9.3/node_modules/typescript
+│   ├── vaul -> .pnpm/vaul@1.1.2_@types+react-dom@19.2.3_@types+react@19.2.17__@types+react@19.2.17_react-dom_d463cce018d613ee2cd1827646e6887a/node_modules/vaul
+│   └── zod -> .pnpm/zod@4.4.3/node_modules/zod
+├── package.json
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml
+├── postcss.config.mjs
+├── prisma
+│   ├── migrations
+│   │   ├── 20260616141625_init
+│   │   │   └── migration.sql
+│   │   └── migration_lock.toml
+│   └── schema.prisma
+├── prisma.config.ts
+├── providers
+│   ├── query-provider.tsx
+│   └── theme-provider.tsx
+├── public
+│   ├── file.svg
+│   ├── globe.svg
+│   ├── next.svg
+│   ├── vercel.svg
+│   └── window.svg
+├── README.md
+├── structure.txt
+├── tsconfig.json
+└── tsconfig.tsbuildinfo
+
+106 directories, 143 files

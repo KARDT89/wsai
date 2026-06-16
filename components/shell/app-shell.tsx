@@ -86,6 +86,15 @@ const actionLabels: Record<string, string> = {
   "/integrations": "Connect App",
 }
 
+const actionHrefs: Record<string, string> = {
+  "/mail": "/mail",
+  "/calendar": "/calendar",
+  "/agent": "/agent",
+  "/approvals": "/approvals",
+  "/settings": "/settings",
+  "/integrations": "/integrations",
+}
+
 export function AppShell({ children, user }: AppShellProps) {
   const pathname = usePathname()
   const router = useRouter()
@@ -109,6 +118,7 @@ export function AppShell({ children, user }: AppShellProps) {
     navItems.find((item) => pathname.startsWith(item.href)) ?? navItems[0]
   const sectionName = sectionLabels[activeItem.href] ?? "Mail"
   const actionLabel = actionLabels[activeItem.href] ?? "Compose"
+  const actionHref = actionHrefs[activeItem.href] ?? "/mail"
 
   async function handleSignOut() {
     setIsSigningOut(true)
@@ -263,7 +273,9 @@ export function AppShell({ children, user }: AppShellProps) {
             <span className="font-mono text-xs text-muted-foreground">K</span>
           </Button>
           <ModeToggle />
-          <Button type="button">{actionLabel}</Button>
+          <Button asChild>
+            <Link href={actionHref}>{actionLabel}</Link>
+          </Button>
         </header>
 
         <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
