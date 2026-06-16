@@ -52,7 +52,7 @@ export function SignupForm({
 
       const result = await authClient.signUp.email({
         ...values,
-        callbackURL: "/dashboard",
+        callbackURL: "/mail",
       })
 
       if (result.error) {
@@ -62,7 +62,7 @@ export function SignupForm({
       return result.data
     },
     onSuccess: () => {
-      router.push("/dashboard")
+      router.push("/mail")
       router.refresh()
     },
   })
@@ -71,7 +71,7 @@ export function SignupForm({
     mutationFn: async (provider: "github" | "google") => {
       const result = await authClient.signIn.social({
         provider,
-        callbackURL: "/dashboard",
+        callbackURL: "/mail",
       })
 
       if (result.error) {

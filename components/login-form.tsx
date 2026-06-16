@@ -44,7 +44,7 @@ export function LoginForm({
     mutationFn: async (values: LoginFormValues) => {
       const result = await authClient.signIn.email({
         ...values,
-        callbackURL: "/dashboard",
+        callbackURL: "/mail",
       })
 
       if (result.error) {
@@ -54,7 +54,7 @@ export function LoginForm({
       return result.data
     },
     onSuccess: () => {
-      router.push("/dashboard")
+      router.push("/mail")
       router.refresh()
     },
   })
@@ -63,7 +63,7 @@ export function LoginForm({
     mutationFn: async (provider: "github" | "google") => {
       const result = await authClient.signIn.social({
         provider,
-        callbackURL: "/dashboard",
+        callbackURL: "/mail",
       })
 
       if (result.error) {

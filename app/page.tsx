@@ -11,7 +11,7 @@ import { getCurrentSession } from "@/lib/session"
 
 export default async function Home() {
   const session = await getCurrentSession()
-  const href = session ? "/dashboard" : "/signup"
+  const href = session ? "/mail" : "/signup"
 
   return (
     <main className="min-h-svh bg-background text-foreground">
@@ -23,7 +23,7 @@ export default async function Home() {
           <nav className="flex items-center gap-2">
             {session ? (
               <Button asChild variant="outline">
-                <Link href="/dashboard">Dashboard</Link>
+                <Link href="/mail">Open mail</Link>
               </Button>
             ) : (
               <>
@@ -54,7 +54,7 @@ export default async function Home() {
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Button asChild size="lg">
                 <Link href={href}>
-                  {session ? "Open dashboard" : "Start triaging"}
+                  {session ? "Open mail" : "Start triaging"}
                   <HugeiconsIcon icon={ArrowRight01Icon} className="size-4" />
                 </Link>
               </Button>
