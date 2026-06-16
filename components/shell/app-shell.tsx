@@ -19,10 +19,12 @@ import {
   UserCircle02Icon,
 } from "@hugeicons/core-free-icons"
 
+import { useTheme } from "next-themes"
+import { MoonIcon, SunIcon } from "@phosphor-icons/react"
+
 import { authClient } from "@/lib/auth-client"
 import { useAiContext } from "@/lib/ai-context"
 import { AiChatFloat } from "@/components/shell/ai-chat-float"
-import { ModeToggle } from "@/components/theme-toggle"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -71,31 +73,14 @@ const sectionLabels: Record<string, string> = {
   "/integrations": "Integrations",
 }
 
-const actionLabels: Record<string, string> = {
-  "/mail": "Compose Email",
-  "/calendar": "New Event",
-  "/agent": "New Task",
-  "/approvals": "Review Queue",
-  "/settings": "Save Preferences",
-  "/integrations": "Connect App",
-}
-
-const actionHrefs: Record<string, string> = {
-  "/mail": "/mail",
-  "/calendar": "/calendar",
-  "/agent": "/agent",
-  "/approvals": "/approvals",
-  "/settings": "/settings",
-  "/integrations": "/integrations",
-}
-
 export function AppShell({ children, user }: AppShellProps) {
   const pathname = usePathname()
   const router = useRouter()
   const [commandOpen, setCommandOpen] = React.useState(false)
   const [aiOpen, setAiOpen] = React.useState(false)
   const [isSigningOut, setIsSigningOut] = React.useState(false)
-  const { setAiContext } = useAiContext()
+  useAiContext()
+  const { theme, setTheme } = useTheme()
 
   // Global keyboard shortcuts
   React.useEffect(() => {
@@ -118,8 +103,6 @@ export function AppShell({ children, user }: AppShellProps) {
   const activeItem =
     navItems.find((item) => pathname.startsWith(item.href)) ?? navItems[0]
   const sectionName = sectionLabels[activeItem.href] ?? "Mail"
-  const actionLabel = actionLabels[activeItem.href] ?? "Compose"
-  const actionHref = actionHrefs[activeItem.href] ?? "/mail"
 
   async function handleSignOut() {
     setIsSigningOut(true)
@@ -228,6 +211,45 @@ export function AppShell({ children, user }: AppShellProps) {
                 Settings
               </DropdownMenuItem>
               <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Appearance</DropdownMenuLabel>
+              <div className="flex gap-1 px-2 pb-1">
+                <button
+                  onClick={() => setTheme("light")}
+                  className={cn(
+                    "flex flex-1 items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs transition-colors",
+                    theme === "light"
+                      ? "border-foreground/20 bg-muted font-medium"
+                      : "border-transparent hover:bg-muted/60"
+                  )}
+                >
+                  <SunIcon className="size-3" />
+                  Light
+                </button>
+                <button
+                  onClick={() => setTheme("dark")}
+                  className={cn(
+                    "flex flex-1 items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs transition-colors",
+                    theme === "dark"
+                      ? "border-foreground/20 bg-muted font-medium"
+                      : "border-transparent hover:bg-muted/60"
+                  )}
+                >
+                  <MoonIcon className="size-3" />
+                  Dark
+                </button>
+                <button
+                  onClick={() => setTheme("system")}
+                  className={cn(
+                    "flex flex-1 items-center justify-center gap-1.5 rounded-md border px-2 py-1.5 text-xs transition-colors",
+                    theme === "system"
+                      ? "border-foreground/20 bg-muted font-medium"
+                      : "border-transparent hover:bg-muted/60"
+                  )}
+                >
+                  Auto
+                </button>
+              </div>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
                 disabled={isSigningOut}
@@ -285,19 +307,17 @@ export function AppShell({ children, user }: AppShellProps) {
 
           <Button
             type="button"
-            variant={aiOpen ? "default" : "outline"}
-            size="icon-sm"
+            className={cn(
+              "hidden gap-2 sm:inline-flex",
+              aiOpen
+                ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                : "border border-violet-500/40 bg-violet-500/10 text-foreground hover:bg-violet-500/20 hover:border-violet-500/60"
+            )}
             onClick={() => setAiOpen((v) => !v)}
-            title="AI assistant (⌘I)"
           >
             <HugeiconsIcon icon={AiChat01Icon} strokeWidth={2} className="size-4" />
-            <span className="sr-only">AI assistant</span>
-          </Button>
-
-          <ModeToggle />
-
-          <Button asChild>
-            <Link href={actionHref}>{actionLabel}</Link>
+            Ask AI
+            <kbd className="font-mono text-[10px] opacity-60">⌘I</kbd>
           </Button>
         </header>
 
