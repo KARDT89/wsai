@@ -2,6 +2,18 @@
 
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core"
+import { CSS } from "@dnd-kit/utilities"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Add01Icon,
@@ -53,7 +65,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
-import type { CacheMetadata, CalendarEvent } from "@/lib/workspace-types"
+import type { CacheMetadata, CalendarAttendee, CalendarEvent } from "@/lib/workspace-types"
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -197,6 +209,12 @@ export function CalendarDashboard() {
 
   const cacheLabel = formatCacheStatus(eventsQuery.data?.cache)
 
+  const [draggingEvent, setDraggingEvent] = React.useState<CalendarEvent | null>(null)
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
+  )
+
   const deleteMutation = useMutation({
     mutationFn: (eventId: string) => calendarAction({ action: "delete", eventId }),
     onSuccess: () => {
@@ -206,6 +224,71 @@ export function CalendarDashboard() {
     },
     onError: (e: Error) => toast.error(e.message),
   })
+
+  const rescheduleMutation = useMutation({
+    mutationFn: async ({
+      event,
+      newStartsAt,
+      newEndsAt,
+    }: {
+      event: CalendarEvent
+      newStartsAt: string
+      newEndsAt: string
+    }) => {
+      await calendarAction({
+        action: "update",
+        eventId: event.corsairId,
+        event: {
+          summary: event.title,
+          location: event.location,
+          description: event.description,
+          start: { dateTime: newStartsAt, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+          end: { dateTime: newEndsAt, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
+        },
+      })
+    },
+    onSuccess: () => {
+      void qc.refetchQueries({ queryKey: ["calendar", "events"] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  function handleDragStart({ active }: DragStartEvent) {
+    setDraggingEvent((active.data.current as { event: CalendarEvent }).event)
+  }
+
+  function handleDragEnd({ active, over, delta }: DragEndEvent) {
+    setDraggingEvent(null)
+    const event = (active.data.current as { event: CalendarEvent } | undefined)?.event
+    if (!event?.startsAt || !event.endsAt || !over) return
+
+    const targetDay = (over.data.current as { day: Date } | undefined)?.day
+    if (!targetDay) return
+
+    const originalStart = new Date(event.startsAt)
+    const originalEnd = new Date(event.endsAt)
+    const durationMs = originalEnd.getTime() - originalStart.getTime()
+
+    const minutesDelta = Math.round((delta.y / HOUR_HEIGHT) * 60 / 15) * 15
+
+    const newStart = new Date(targetDay)
+    newStart.setHours(originalStart.getHours(), originalStart.getMinutes() + minutesDelta, 0, 0)
+
+    // Clamp within visible grid
+    const startOfDay = new Date(newStart); startOfDay.setHours(0, 0, 0, 0)
+    const timeMs = newStart.getTime() - startOfDay.getTime()
+    const minMs = START_HOUR * 3600000
+    const maxMs = (END_HOUR - 1) * 3600000
+    if (timeMs < minMs) newStart.setHours(START_HOUR, 0, 0, 0)
+    if (timeMs > maxMs) newStart.setHours(END_HOUR - 1, 0, 0, 0)
+
+    const newEnd = new Date(newStart.getTime() + durationMs)
+
+    // Skip if unchanged
+    if (newStart.getTime() === originalStart.getTime()) return
+
+    rescheduleMutation.mutate({ event, newStartsAt: newStart.toISOString(), newEndsAt: newEnd.toISOString() })
+  }
 
   // Keyboard shortcuts
   React.useEffect(() => {
@@ -386,29 +469,41 @@ export function CalendarDashboard() {
         ) : eventsQuery.isError ? (
           <CalendarState title="Error" detail="Could not load calendar events." />
         ) : view === "week" ? (
-          <WeekView
-            days={weekDays}
-            events={events}
-            selectedEvent={selectedEvent}
-            onSelectEvent={setSelectedEvent}
-            onClickSlot={(day, hour) => {
-              const d = new Date(day)
-              d.setHours(hour, 0, 0, 0)
-              openCreateDialog(d.toISOString())
-            }}
-          />
+          <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+            <WeekView
+              days={weekDays}
+              events={events}
+              selectedEvent={selectedEvent}
+              onSelectEvent={setSelectedEvent}
+              draggingId={draggingEvent?.id}
+              onClickSlot={(day, hour) => {
+                const d = new Date(day)
+                d.setHours(hour, 0, 0, 0)
+                openCreateDialog(d.toISOString())
+              }}
+            />
+            <DragOverlay dropAnimation={null}>
+              {draggingEvent && <EventGhost event={draggingEvent} />}
+            </DragOverlay>
+          </DndContext>
         ) : view === "day" ? (
-          <DayView
-            day={currentDate}
-            events={events}
-            selectedEvent={selectedEvent}
-            onSelectEvent={setSelectedEvent}
-            onClickSlot={(day, hour) => {
-              const d = new Date(day)
-              d.setHours(hour, 0, 0, 0)
-              openCreateDialog(d.toISOString())
-            }}
-          />
+          <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+            <DayView
+              day={currentDate}
+              events={events}
+              selectedEvent={selectedEvent}
+              onSelectEvent={setSelectedEvent}
+              draggingId={draggingEvent?.id}
+              onClickSlot={(day, hour) => {
+                const d = new Date(day)
+                d.setHours(hour, 0, 0, 0)
+                openCreateDialog(d.toISOString())
+              }}
+            />
+            <DragOverlay dropAnimation={null}>
+              {draggingEvent && <EventGhost event={draggingEvent} />}
+            </DragOverlay>
+          </DndContext>
         ) : (
           <MonthView
             days={monthDays}
@@ -443,6 +538,7 @@ export function CalendarDashboard() {
         mode={dialogState.mode}
         event={dialogState.event}
         prefillStart={dialogState.prefillStart}
+        allEvents={events}
         onClose={() => setDialogState({ open: false, mode: "create" })}
         onSaved={() => {
           void qc.refetchQueries({ queryKey: ["calendar", "events"] })
@@ -459,12 +555,14 @@ function WeekView({
   days,
   events,
   selectedEvent,
+  draggingId,
   onSelectEvent,
   onClickSlot,
 }: {
   days: Date[]
   events: CalendarEvent[]
   selectedEvent: CalendarEvent | null
+  draggingId?: string
   onSelectEvent: (e: CalendarEvent) => void
   onClickSlot: (day: Date, hour: number) => void
 }) {
@@ -517,6 +615,7 @@ function WeekView({
               day={day}
               events={eventsForDay(events, day)}
               selectedEvent={selectedEvent}
+              draggingId={draggingId}
               onSelectEvent={onSelectEvent}
               onClickSlot={onClickSlot}
             />
@@ -533,12 +632,14 @@ function DayView({
   day,
   events,
   selectedEvent,
+  draggingId,
   onSelectEvent,
   onClickSlot,
 }: {
   day: Date
   events: CalendarEvent[]
   selectedEvent: CalendarEvent | null
+  draggingId?: string
   onSelectEvent: (e: CalendarEvent) => void
   onClickSlot: (day: Date, hour: number) => void
 }) {
@@ -575,6 +676,7 @@ function DayView({
             day={day}
             events={eventsForDay(events, day)}
             selectedEvent={selectedEvent}
+            draggingId={draggingId}
             onSelectEvent={onSelectEvent}
             onClickSlot={onClickSlot}
           />
@@ -590,21 +692,29 @@ function DayColumn({
   day,
   events,
   selectedEvent,
+  draggingId,
   onSelectEvent,
   onClickSlot,
 }: {
   day: Date
   events: CalendarEvent[]
   selectedEvent: CalendarEvent | null
+  draggingId?: string
   onSelectEvent: (e: CalendarEvent) => void
   onClickSlot: (day: Date, hour: number) => void
 }) {
   const timedEvents = events.filter((e) => !isAllDay(e))
   const columns = layoutColumns(timedEvents)
 
+  const { setNodeRef, isOver } = useDroppable({
+    id: day.toISOString(),
+    data: { day },
+  })
+
   return (
     <div
-      className="relative border-r last:border-r-0"
+      ref={setNodeRef}
+      className={cn("relative border-r last:border-r-0", isOver && "bg-sky-50/40 dark:bg-sky-900/10")}
       style={{ height: TOTAL_HEIGHT }}
     >
       {/* Hour grid lines + click targets */}
@@ -624,26 +734,88 @@ function DayColumn({
         const width = `calc(${100 / totalCols}% - 4px)`
         const left = `calc(${(col / totalCols) * 100}% + 2px)`
         const isSelected = selectedEvent?.id === event.id
+        const isDragging = draggingId === event.id
 
         return (
-          <button
+          <DraggableEvent
             key={event.id}
-            className={cn(
-              "absolute rounded-md px-1.5 py-0.5 text-left text-xs font-medium transition-all overflow-hidden",
-              "bg-sky-500/20 text-sky-700 dark:text-sky-300 border border-sky-500/30",
-              "hover:bg-sky-500/30 hover:border-sky-500/60",
-              isSelected && "ring-2 ring-sky-500 bg-sky-500/30"
-            )}
-            style={{ top, height, width, left }}
-            onClick={(e) => { e.stopPropagation(); onSelectEvent(event) }}
-          >
-            <p className="truncate leading-tight">{event.title}</p>
-            {height > 40 && (
-              <p className="truncate text-[10px] opacity-75 mt-0.5">{event.time}</p>
-            )}
-          </button>
+            event={event}
+            top={top}
+            height={height}
+            width={width}
+            left={left}
+            isSelected={isSelected}
+            isDragging={isDragging}
+            onSelect={onSelectEvent}
+          />
         )
       })}
+    </div>
+  )
+}
+
+function DraggableEvent({
+  event,
+  top,
+  height,
+  width,
+  left,
+  isSelected,
+  isDragging,
+  onSelect,
+}: {
+  event: CalendarEvent
+  top: number
+  height: number
+  width: string
+  left: string
+  isSelected: boolean
+  isDragging: boolean
+  onSelect: (e: CalendarEvent) => void
+}) {
+  const { attributes, listeners, setNodeRef, transform } = useDraggable({
+    id: event.id,
+    data: { event },
+    disabled: isAllDay(event),
+  })
+
+  return (
+    <button
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      className={cn(
+        "absolute rounded-md px-1.5 py-0.5 text-left text-xs font-medium transition-colors overflow-hidden touch-none",
+        "bg-sky-500/20 text-sky-700 dark:text-sky-300 border border-sky-500/30",
+        "hover:bg-sky-500/30 hover:border-sky-500/60",
+        isSelected && "ring-2 ring-sky-500 bg-sky-500/30",
+        isDragging && "opacity-30"
+      )}
+      style={{
+        top,
+        height,
+        width,
+        left,
+        transform: CSS.Translate.toString(transform),
+        cursor: isDragging ? "grabbing" : "grab",
+      }}
+      onClick={(e) => { e.stopPropagation(); onSelect(event) }}
+    >
+      <p className="truncate leading-tight">{event.title}</p>
+      {height > 40 && (
+        <p className="truncate text-[10px] opacity-75 mt-0.5">{event.time}</p>
+      )}
+    </button>
+  )
+}
+
+function EventGhost({ event }: { event: CalendarEvent }) {
+  return (
+    <div
+      className="rounded-md px-1.5 py-0.5 text-xs font-medium overflow-hidden bg-sky-500/40 text-sky-700 dark:text-sky-300 border border-sky-500/60 shadow-lg opacity-90 pointer-events-none"
+      style={{ height: Math.max(22, eventHeight(event)), width: 120 }}
+    >
+      <p className="truncate leading-tight">{event.title}</p>
     </div>
   )
 }
@@ -827,6 +999,16 @@ function EventDetailPanel({
   onDelete: () => void
   isDeleting: boolean
 }) {
+  const qc = useQueryClient()
+  const rsvpMutation = useMutation({
+    mutationFn: (responseStatus: string) =>
+      calendarAction({ action: "rsvp", eventId: event.corsairId, responseStatus }),
+    onSuccess: () => {
+      void qc.refetchQueries({ queryKey: ["calendar", "events"] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
   return (
     <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l bg-background shadow-xl lg:inset-y">
       <div className="flex items-center justify-between border-b px-4 py-3">
@@ -891,6 +1073,23 @@ function EventDetailPanel({
               {event.attendees.length > 0 ? event.attendees.join(", ") : "No attendees"}
             </span>
           </DetailRow>
+
+          {!event.iAmOrganizer && event.attendeeDetails.length > 0 && (
+            <div className="flex items-center gap-2">
+              {(["accepted", "tentative", "declined"] as const).map((status) => (
+                <Button
+                  key={status}
+                  size="sm"
+                  variant={event.myResponseStatus === status ? "default" : "outline"}
+                  className="h-7 text-xs capitalize"
+                  disabled={rsvpMutation.isPending}
+                  onClick={() => rsvpMutation.mutate(status)}
+                >
+                  {status === "accepted" ? "Accept" : status === "tentative" ? "Maybe" : "Decline"}
+                </Button>
+              ))}
+            </div>
+          )}
 
           {event.description && (
             <>
@@ -972,6 +1171,7 @@ function EventDialog({
   mode,
   event,
   prefillStart,
+  allEvents,
   onClose,
   onSaved,
 }: {
@@ -979,6 +1179,7 @@ function EventDialog({
   mode: "create" | "edit"
   event?: CalendarEvent
   prefillStart?: string
+  allEvents?: CalendarEvent[]
   onClose: () => void
   onSaved: () => void
 }) {
@@ -1005,6 +1206,20 @@ function EventDialog({
   const [form, setForm] = React.useState<EventForm>(() =>
     initialEventForm({ mode, event, defaultStart, defaultEnd })
   )
+
+  const conflicts = React.useMemo(() => {
+    if (form.allDay || !form.startDatetime || !form.endDatetime) return []
+    const start = new Date(localDatetimeToISO(form.startDatetime)).getTime()
+    const end = new Date(localDatetimeToISO(form.endDatetime)).getTime()
+    if (isNaN(start) || isNaN(end) || end <= start) return []
+    return (allEvents ?? []).filter((e) => {
+      if (mode === "edit" && e.id === event?.id) return false
+      if (!e.startsAt || !e.endsAt) return false
+      const eStart = new Date(e.startsAt).getTime()
+      const eEnd = new Date(e.endsAt).getTime()
+      return start < eEnd && end > eStart
+    })
+  }, [form.startDatetime, form.endDatetime, form.allDay, allEvents, mode, event?.id])
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -1034,7 +1249,9 @@ function EventDialog({
       }
     },
     onSuccess: () => {
-      toast.success(mode === "edit" ? "Event updated" : "Event created")
+      const hasAttendees = form.attendees.split(/[,;\s]+/).some((a) => a.trim().includes("@"))
+      const base = mode === "edit" ? "Event updated" : "Event created"
+      toast.success(hasAttendees ? `${base} and invites sent` : base)
       onSaved()
     },
     onError: (e: Error) => toast.error(e.message),
@@ -1094,6 +1311,12 @@ function EventDialog({
               />
             </div>
           </div>
+
+          {conflicts.length > 0 && (
+            <div className="rounded-md border border-yellow-500/40 bg-yellow-50/60 px-3 py-2 text-xs text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-300">
+              Conflicts with: {conflicts.map((e) => e.title).join(", ")}
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label htmlFor="evt-location">Location</Label>

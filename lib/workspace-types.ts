@@ -38,6 +38,14 @@ export type CacheMetadata = {
   itemCount: number
 }
 
+export type CalendarAttendee = {
+  email: string
+  displayName?: string
+  responseStatus?: "accepted" | "declined" | "tentative" | "needsAction"
+  self?: boolean
+  organizer?: boolean
+}
+
 export type CalendarEvent = {
   id: string
   corsairId: string
@@ -49,6 +57,9 @@ export type CalendarEvent = {
   location?: string
   meetingLink?: string
   attendees: string[]
+  attendeeDetails: CalendarAttendee[]
+  myResponseStatus?: CalendarAttendee["responseStatus"]
+  iAmOrganizer?: boolean
   description?: string
   calendar: string
 }

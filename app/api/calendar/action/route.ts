@@ -14,8 +14,20 @@ type CalendarEventInput = {
   recurrence?: string[]
 }
 
+type CalendarEventData = {
+  summary?: string
+  description?: string
+  location?: string
+  start?: { dateTime?: string; date?: string; timeZone?: string }
+  end?: { dateTime?: string; date?: string; timeZone?: string }
+  attendees?: { email: string; responseStatus?: string; self?: boolean; organizer?: boolean }[]
+  recurrence?: string[]
+  hangoutLink?: string
+}
+
 type CalendarApi = {
   events: {
+    get: (args: { id: string }) => Promise<CalendarEventData>
     create: (args: { event: CalendarEventInput; sendUpdates?: string }) => Promise<unknown>
     update: (args: {
       id: string
@@ -37,6 +49,7 @@ export async function POST(request: Request) {
     action?: string
     eventId?: string
     event?: CalendarEventInput
+    responseStatus?: string
   }
 
   const { action } = payload
@@ -85,6 +98,29 @@ export async function POST(request: Request) {
       await calendarApi.events.delete({ id: payload.eventId, sendUpdates: "all" })
       void triggerSync(session.user.id, "googlecalendar", "user_action")
       return NextResponse.json({ deleted: true })
+    }
+
+    if (action === "rsvp") {
+      if (!payload.eventId || !payload.responseStatus) {
+        return NextResponse.json(
+          { error: "eventId and responseStatus are required for rsvp" },
+          { status: 400 }
+        )
+      }
+      const current = await calendarApi.events.get({ id: payload.eventId })
+      const userEmail = session.user.email
+      const updatedAttendees = (current.attendees ?? []).map((a) =>
+        a.email === userEmail || a.self
+          ? { ...a, responseStatus: payload.responseStatus }
+          : a
+      )
+      await calendarApi.events.update({
+        id: payload.eventId,
+        event: { ...current, attendees: updatedAttendees as CalendarEventInput["attendees"] },
+        sendUpdates: "none",
+      })
+      void triggerSync(session.user.id, "googlecalendar", "user_action")
+      return NextResponse.json({ ok: true })
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 })

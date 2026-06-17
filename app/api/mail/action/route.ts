@@ -15,22 +15,35 @@ const threadActions = [
   "spam",
   "label",
   "unlabel",
+  "snooze",
 ] as const
 
 type ThreadAction = (typeof threadActions)[number]
 
-type ThreadModifyArgs = {
-  id: string
-  addLabelIds?: string[]
-  removeLabelIds?: string[]
-}
-
-type GmailThreadApi = {
+type GmailApi = {
   threads: {
-    modify: (args: ThreadModifyArgs) => Promise<unknown>
+    modify: (args: { id: string; addLabelIds?: string[]; removeLabelIds?: string[] }) => Promise<unknown>
     trash: (args: { id: string }) => Promise<unknown>
     untrash: (args: { id: string }) => Promise<unknown>
   }
+  labels: {
+    list: (args: Record<string, never>) => Promise<{ labels?: Array<{ id: string; name: string }> }>
+    create: (args: { name: string; labelListVisibility?: string; messageListVisibility?: string }) => Promise<{ id: string }>
+  }
+}
+
+const SNOOZE_LABEL_NAME = "WSAI_SNOOZED"
+
+async function getOrCreateSnoozeLabel(gmail: GmailApi): Promise<string> {
+  const { labels = [] } = await gmail.labels.list({})
+  const existing = labels.find((l) => l.name === SNOOZE_LABEL_NAME)
+  if (existing) return existing.id
+  const created = await gmail.labels.create({
+    name: SNOOZE_LABEL_NAME,
+    labelListVisibility: "labelShow",
+    messageListVisibility: "show",
+  })
+  return created.id
 }
 
 export async function POST(request: Request) {
@@ -62,7 +75,19 @@ export async function POST(request: Request) {
 
   try {
     await ensureCorsairSetup(session.user.id)
-    const gmail = getCorsairInstance().withTenant(session.user.id).gmail.api
+    const gmail = getCorsairInstance().withTenant(session.user.id).gmail.api as unknown as GmailApi
+
+    if (payload.action === "snooze") {
+      const labelId = await getOrCreateSnoozeLabel(gmail)
+      await gmail.threads.modify({
+        id: payload.threadId,
+        addLabelIds: [labelId],
+        removeLabelIds: ["INBOX"],
+      })
+      void triggerSync(session.user.id, "gmail", "user_action")
+      return NextResponse.json({ thread: { id: payload.threadId } })
+    }
+
     const result = await runThreadAction(gmail, payload.threadId, payload.action, payload.labelId)
     void triggerSync(session.user.id, "gmail", "user_action")
 
@@ -83,7 +108,7 @@ function isThreadAction(action?: string): action is ThreadAction {
 }
 
 function runThreadAction(
-  gmail: GmailThreadApi,
+  gmail: GmailApi,
   threadId: string,
   action: ThreadAction,
   labelId?: string

@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db"
 import { getCurrentSession } from "@/lib/session"
 import { getSyncStatus, type SyncStatusMetadata } from "@/lib/sync-status"
-import type { CacheMetadata, CalendarEvent } from "@/lib/workspace-types"
+import type { CacheMetadata, CalendarAttendee, CalendarEvent } from "@/lib/workspace-types"
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -65,11 +65,27 @@ function mapCalendarEvent(entityId: string, d: any): CalendarEvent {
     ? new Date(startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : ""
 
-  const attendees: string[] = Array.isArray(d?.attendees)
-    ? (d.attendees as { email?: string; displayName?: string }[])
-        .map((a) => a.email ?? a.displayName ?? "")
-        .filter(Boolean)
-    : []
+  type RawAttendee = {
+    email?: string
+    displayName?: string
+    responseStatus?: string
+    self?: boolean
+    organizer?: boolean
+  }
+
+  const rawAttendees: RawAttendee[] = Array.isArray(d?.attendees) ? d.attendees : []
+
+  const attendeeDetails = rawAttendees.map((a) => ({
+    email: a.email ?? "",
+    displayName: a.displayName,
+    responseStatus: a.responseStatus as CalendarAttendee["responseStatus"],
+    self: a.self,
+    organizer: a.organizer,
+  })).filter((a) => a.email)
+
+  const attendees = attendeeDetails.map((a) => a.email)
+  const me = attendeeDetails.find((a) => a.self)
+  const organizer = attendeeDetails.find((a) => a.organizer)
 
   return {
     id: entityId,
@@ -82,6 +98,9 @@ function mapCalendarEvent(entityId: string, d: any): CalendarEvent {
     location: d?.location,
     meetingLink: d?.hangoutLink,
     attendees,
+    attendeeDetails,
+    myResponseStatus: me?.responseStatus,
+    iAmOrganizer: organizer?.self ?? false,
     description: d?.description,
     calendar: d?.calendarId ?? "primary",
   }

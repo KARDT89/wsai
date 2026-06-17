@@ -22,6 +22,7 @@ import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Calendar } from "@/components/ui/calendar"
 import {
   Dialog,
   DialogContent,
@@ -31,6 +32,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
@@ -49,6 +51,7 @@ type ThreadAction =
   | "markRead"
   | "markUnread"
   | "spam"
+  | "snooze"
 
 type ComposeState = {
   to: string
@@ -85,6 +88,7 @@ export function MailWorkspace() {
   const [composeOpen, setComposeOpen] = React.useState(false)
   const [composeTitle, setComposeTitle] = React.useState("New message")
   const [compose, setCompose] = React.useState<ComposeState>(emptyCompose)
+  const [snoozeOpen, setSnoozeOpen] = React.useState(false)
   const queryClient = useQueryClient()
 
   const threadsQuery = useQuery({
@@ -174,7 +178,8 @@ export function MailWorkspace() {
             variables.action === "archive" ||
             variables.action === "trash" ||
             variables.action === "untrash" ||
-            variables.action === "spam"
+            variables.action === "spam" ||
+            variables.action === "snooze"
           ) {
             return {
               ...old,
@@ -871,6 +876,33 @@ export function MailWorkspace() {
             >
               Reply all
             </Button>
+
+            <Popover open={snoozeOpen} onOpenChange={setSnoozeOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!selectedThread}
+                >
+                  <HugeiconsIcon icon={Clock01Icon} strokeWidth={2} className="size-4" />
+                  Snooze
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="end">
+                <Calendar
+                  mode="single"
+                  disabled={(date) => date < new Date()}
+                  onSelect={(date) => {
+                    if (!date || !selectedThread) return
+                    setSnoozeOpen(false)
+                    threadActionMutation.mutate({
+                      threadId: selectedThread.corsairId,
+                      action: "snooze",
+                    })
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
 
@@ -1066,6 +1098,7 @@ function getActionSuccessLabel(action: ThreadAction) {
   if (action === "markRead") return "Marked as read"
   if (action === "markUnread") return "Marked as unread"
   if (action === "spam") return "Marked as spam"
+  if (action === "snooze") return "Snoozed"
   return "Done"
 }
 
