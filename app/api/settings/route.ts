@@ -5,7 +5,7 @@ import { getCurrentSession } from "@/lib/session"
 
 function normalizeApprovalStrict(value?: string | null) {
   if (value === "all" || value === "writes" || value === "never") return value
-  return "writes"
+  return "never"
 }
 
 export async function GET() {
@@ -23,7 +23,7 @@ export async function GET() {
       apiKeyProvider: null,
       apiKey: null,
       aiTone: "professional",
-      approvalStrict: "writes",
+      approvalStrict: "never",
       emailSignature: null,
     },
     // Mask the actual key — only expose whether one is set

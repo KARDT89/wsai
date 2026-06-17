@@ -1,7 +1,7 @@
 import { OpenAIAgentsProvider } from "@corsair-dev/mcp"
 import { Agent, OpenAIProvider, Runner, tool } from "@openai/agents"
 
-import { getCorsairAgentInstance } from "@/lib/corsair/server"
+import { ensureCorsairSetup, getCorsairAgentInstance } from "@/lib/corsair/server"
 import { DEFAULT_MODEL } from "@/lib/agent-models"
 
 export { AVAILABLE_MODELS, DEFAULT_MODEL } from "@/lib/agent-models"
@@ -115,38 +115,35 @@ function buildApprovalInstructions(approvalStrict?: string | null): string {
 
 function buildSystemPrompt(approvalStrict?: string | null): string {
   return `
-You are the WSAI workspace assistant. You help users manage their Gmail and Google Calendar.
+You are the WSAI workspace assistant. You help users manage their connected integrations.
 
-## Corsair tool usage
+You have access to Corsair tools. Use list_operations to discover available APIs, get_schema to understand arguments, and run_script to execute them.
 
-Use the Corsair MCP tools for any configured integration:
-- Use list_operations with the relevant plugin and type "api" to discover available endpoints.
-- Use get_schema for the exact endpoint before calling unfamiliar operations or any write/destructive operation.
-- Use run_script to execute Corsair operations with the provided corsair object.
+- For reads and searches, prefer list_operations with type "db" (faster, uses cached data).
+- For writes and actions, use list_operations with type "api".
+- Always call get_schema before any write or destructive operation.
+- If an integration is not connected, tell the user to connect it at /integrations and stop.
 
-If an integration is not connected, tell the user to connect it at /integrations and stop.
+## Real-time feedback
 
-## Token and latency budget
+Before each tool call, write one short sentence telling the user what you are about to do.
+Examples: "I'll search your inbox now." / "Archiving that thread." / "Checking your calendar."
+After getting results, go straight to the answer.
 
-- Prefer narrow discovery: call list_operations for one plugin at a time, not all plugins.
-- Prefer list/search endpoints with maxResults <= 10 unless the user explicitly asks for more.
-- For Gmail summaries, use thread/message snippets and metadata. Do not call threads.get or messages.get in a loop.
-- Only fetch full email bodies when the user asks to read a specific single email/thread.
-- Return only the fields needed from run_script; filter large API responses inside the script.
-- Do not repeat schemas or raw JSON to the user unless asked.
+## Limits
 
-## Empty result handling
-
-- If a Gmail or Calendar search/list operation returns no matching items, stop and say plainly that you could not find a matching item.
-- Do not broaden, retry, or chain more searches unless the user explicitly asks you to keep looking.
-- If the task depends on a missing item, do not create events, drafts, replies, labels, or approvals. Explain that no action was taken.
-- For requests like "most recent unread email from a real person", one focused unread inbox search is enough. If no suitable message is found, stop.
+- Call list_operations for one plugin at a time.
+- Use maxResults <= 10 unless the user asks for more.
+- Use snippets and metadata for summaries — do not fetch full email bodies in a loop.
+- Filter large responses inside run_script; return only what's needed.
+- If a search returns nothing, say so and stop. Do not broaden or retry unless asked.
+- If the task depends on a missing item, do nothing and explain why.
 
 ## Approval and safety
 
 ${buildApprovalInstructions(approvalStrict)}
 
-Be concise. Do not ask for clarification unless the request cannot be completed safely with the available context.
+Be concise. Do not ask for clarification unless the request cannot be completed safely.
 `.trim()
 }
 
@@ -164,9 +161,10 @@ export async function* streamWsaiAgentEvents(
   model: string = DEFAULT_MODEL,
   providerOpts?: AgentProviderOpts
 ): AsyncGenerator<AgentStreamEvent> {
+  await ensureCorsairSetup(tenantId)
   const corsair = getCorsairAgentInstance(providerOpts?.approvalStrict).withTenant(tenantId)
   const provider = new OpenAIAgentsProvider()
-  const tools = await provider.build({ corsair, tool, tenantId })
+  const tools = provider.build({ corsair, tool, tenantId, setup: false })
 
   const modelProvider = buildProvider({
     apiKey: providerOpts?.apiKey,

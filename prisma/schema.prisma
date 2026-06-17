@@ -207,7 +207,7 @@ model UserSettings {
   apiKeyProvider String? // "openrouter" | "openai" | "anthropic"
   apiKey         String? // user-supplied key (store encrypted in production)
   aiTone         String  @default("professional") // "professional" | "casual" | "concise"
-  approvalStrict String  @default("writes") // "all" | "writes" | "never"
+  approvalStrict String  @default("never") // "all" | "writes" | "never"
   emailSignature String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

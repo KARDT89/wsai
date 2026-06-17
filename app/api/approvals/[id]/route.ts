@@ -1,13 +1,8 @@
 import { executePermission } from "corsair"
-import { NextResponse } from "next/server"
+import { after, NextResponse } from "next/server"
 
-import { enqueueCorsairSync } from "@/inngest/events"
-import { getCorsairInstance } from "@/lib/corsair/server"
-import {
-  isSyncableCorsairPlugin,
-  type GmailMailbox,
-  type SyncableCorsairPluginId,
-} from "@/lib/corsair/sync"
+import { ensureCorsairSetup, getCorsairInstance } from "@/lib/corsair/server"
+import { syncCorsairPlugin, isSyncableCorsairPlugin, type SyncableCorsairPluginId } from "@/lib/corsair/sync"
 import { prisma } from "@/lib/db"
 import { getCurrentSession } from "@/lib/session"
 
@@ -21,6 +16,7 @@ type CorsairPermissionRow = {
   args: string
   tenant_id: string
   status: string
+  expires_at: string
   created_at: Date
   updated_at: Date
   error?: string | null
@@ -57,12 +53,16 @@ export async function DELETE(_req: Request, { params }: Params) {
 
   const { id } = await params
   if (id.startsWith("corsair:")) {
-    await prisma.$executeRaw`
-      DELETE FROM corsair_permissions
-      WHERE id = ${id.slice("corsair:".length)}
-        AND tenant_id = ${session.user.id}
-    `
-
+    try {
+      await prisma.$executeRaw`
+        DELETE FROM corsair_permissions
+        WHERE id = ${id.slice("corsair:".length)}
+          AND tenant_id = ${session.user.id}
+      `
+    } catch (err) {
+      console.error("[approvals] delete failed:", err)
+      return NextResponse.json({ error: "Failed to delete approval" }, { status: 500 })
+    }
     return NextResponse.json({ ok: true })
   }
 
@@ -94,77 +94,85 @@ async function handleCorsairPermission(
     return NextResponse.json({ error: "Already decided" }, { status: 409 })
   }
 
-  if (action === "reject") {
+  try {
+    if (action === "reject") {
+      await prisma.$executeRaw`
+        UPDATE corsair_permissions
+        SET status = 'denied',
+            updated_at = NOW()
+        WHERE id = ${id}
+          AND tenant_id = ${tenantId}
+      `
+      const updated = { ...permission, updated_at: new Date() }
+      return NextResponse.json({
+        approval: mapCorsairPermission(updated, "denied"),
+      })
+    }
+
     await prisma.$executeRaw`
       UPDATE corsair_permissions
-      SET status = 'denied',
+      SET status = 'approved',
           updated_at = NOW()
       WHERE id = ${id}
         AND tenant_id = ${tenantId}
     `
+
+    await ensureCorsairSetup(tenantId)
+    const result = await executePermission(getCorsairInstance(), permission.token)
+
+    const ok = !result.error
+    const finalStatus = ok ? "completed" : "failed"
+    const now = new Date()
+
+    await prisma.$executeRaw`
+      UPDATE corsair_permissions
+      SET status = ${finalStatus},
+          error = ${ok ? null : String(result.error ?? "Execution failed")},
+          updated_at = NOW()
+      WHERE id = ${id}
+        AND tenant_id = ${tenantId}
+    `
+
+    if (ok && isSyncableCorsairPlugin(permission.plugin)) {
+      after(() =>
+        syncCorsairPlugin(tenantId, permission.plugin as SyncableCorsairPluginId, "user_action")
+      )
+    }
+
+    const updated = { ...permission, updated_at: now }
+
+    if (!ok) {
+      return NextResponse.json(
+        {
+          error: result.error ?? "Execution failed",
+          approval: mapCorsairPermission(updated, finalStatus),
+        },
+        { status: 500 }
+      )
+    }
 
     return NextResponse.json({
-      approval: mapCorsairPermission(permission, "denied"),
+      approval: mapCorsairPermission(updated, finalStatus),
     })
-  }
-
-  await prisma.$executeRaw`
-    UPDATE corsair_permissions
-    SET status = 'approved',
-        updated_at = NOW()
-    WHERE id = ${id}
-      AND tenant_id = ${tenantId}
-  `
-
-  let result: Awaited<ReturnType<typeof executePermission>>
-  try {
-    result = await executePermission(getCorsairInstance(), permission.token)
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : "Execution threw unexpectedly"
-    await prisma.$executeRaw`
-      UPDATE corsair_permissions
-      SET status = 'failed',
-          error = ${errMsg},
-          updated_at = NOW()
-      WHERE id = ${id}
-        AND tenant_id = ${tenantId}
-    `
+    try {
+      await prisma.$executeRaw`
+        UPDATE corsair_permissions
+        SET status = 'failed',
+            error = ${errMsg},
+            updated_at = NOW()
+        WHERE id = ${id}
+          AND tenant_id = ${tenantId}
+      `
+    } catch {
+      // best-effort — don't mask the original error
+    }
     return NextResponse.json(
       { error: errMsg, approval: mapCorsairPermission(permission, "failed") },
       { status: 500 }
     )
   }
-  const ok = !result.error
-  const finalStatus = ok ? "completed" : "failed"
-
-  if (ok) {
-    enqueueApprovalSync(tenantId, permission.plugin, permission.endpoint).catch((err) =>
-      console.error("[approvals] sync enqueue failed:", err)
-    )
-  }
-
-  await prisma.$executeRaw`
-    UPDATE corsair_permissions
-    SET status = ${finalStatus},
-        error = ${ok ? null : String(result.error ?? "Execution failed")},
-        updated_at = NOW()
-    WHERE id = ${id}
-      AND tenant_id = ${tenantId}
-  `
-
-  if (!ok) {
-    return NextResponse.json(
-      {
-        error: result.error ?? "Execution failed",
-        approval: mapCorsairPermission(permission, finalStatus),
-      },
-      { status: 500 }
-    )
-  }
-
-  return NextResponse.json({
-    approval: mapCorsairPermission(permission, finalStatus),
-  })
 }
 
 function mapCorsairPermission(
@@ -186,50 +194,9 @@ function mapCorsairPermission(
           : status === "pending"
             ? "pending"
             : "approved",
-    decidedAt: status === "pending" ? null : new Date().toISOString(),
+    decidedAt: status === "pending" ? null : new Date(permission.updated_at).toISOString(),
     createdAt: new Date(permission.created_at).toISOString(),
   }
-}
-
-async function enqueueApprovalSync(
-  tenantId: string,
-  plugin: string,
-  operation: string
-) {
-  if (!isSyncableCorsairPlugin(plugin)) return
-
-  const mailboxes = getGmailSyncMailboxes(plugin, operation)
-  if (mailboxes.length > 0) {
-    await Promise.all(
-      mailboxes.map((mailbox) =>
-        enqueueCorsairSync({
-          tenantId,
-          plugin: "gmail",
-          reason: "agent_action",
-          mailbox,
-        })
-      )
-    )
-    return
-  }
-
-  await enqueueCorsairSync({
-    tenantId,
-    plugin: plugin as SyncableCorsairPluginId,
-    reason: "agent_action",
-  })
-}
-
-function getGmailSyncMailboxes(plugin: string, operation: string): GmailMailbox[] {
-  if (plugin !== "gmail") return []
-  if (operation === "messages.send" || operation === "drafts.send") return ["sent"]
-  if (operation.startsWith("drafts.")) return ["drafts"]
-  if (operation.endsWith(".trash")) return ["inbox", "trash"]
-  if (operation.endsWith(".untrash")) return ["trash", "inbox"]
-  if (operation.endsWith(".modify") || operation.endsWith(".batchModify")) {
-    return ["inbox", "starred"]
-  }
-  return []
 }
 
 function describePermission(
