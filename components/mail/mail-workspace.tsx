@@ -90,9 +90,9 @@ export function MailWorkspace() {
   const threadsQuery = useQuery({
     queryKey: ["mail", "threads", selectedMailbox],
     queryFn: () => fetchMailThreads(selectedMailbox),
-    staleTime: 30_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: true,
   })
 
   const threads = React.useMemo(
@@ -124,7 +124,7 @@ export function MailWorkspace() {
       setCompose(emptyCompose)
       setComposeTitle("New message")
       toast.success("Email sent")
-      void queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })
+      void queryClient.refetchQueries({ queryKey: ["mail", "threads"] })
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Unable to send email")
@@ -138,7 +138,7 @@ export function MailWorkspace() {
       setCompose(emptyCompose)
       setComposeTitle("New message")
       toast.success("Draft saved")
-      void queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })
+      void queryClient.refetchQueries({ queryKey: ["mail", "threads"] })
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Unable to save draft")
@@ -223,7 +223,7 @@ export function MailWorkspace() {
     },
     onSuccess: (_data, variables) => {
       toast.success(getActionSuccessLabel(variables.action))
-      void queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })
+      void queryClient.refetchQueries({ queryKey: ["mail", "threads"] })
     },
     onError: (error, _variables, context) => {
       if (context?.previous !== undefined) {
@@ -490,19 +490,19 @@ export function MailWorkspace() {
 
         <ScrollArea className="h-[calc(100svh-8.5rem)]">
           {threadsQuery.isPending ? (
-            <MailState title="Loading cached Gmail" detail="Reading Corsair cache rows." />
+            <MailState title="Loading Gmail" detail="Reading current Corsair mail data." />
           ) : threadsQuery.isError ? (
             <MailState
               title="Could not load mail"
-              detail="The mail API returned an error while reading Corsair cache."
+              detail="The mail API returned an error while reading Corsair mail data."
             />
           ) : filteredThreads.length === 0 ? (
             <MailState
-              title={searchQuery.trim() ? "No matching threads" : `No cached ${currentMailboxName.toLowerCase()} yet`}
+              title={searchQuery.trim() ? "No matching threads" : `No ${currentMailboxName.toLowerCase()} yet`}
               detail={
                 searchQuery.trim()
                   ? "Try a different search term."
-                  : `No ${currentMailboxName.toLowerCase()} messages are cached yet.`
+                  : `No ${currentMailboxName.toLowerCase()} messages are available yet.`
               }
             />
           ) : (
@@ -884,7 +884,9 @@ export function MailWorkspace() {
 }
 
 async function fetchMailThreads(mailbox: Mailbox): Promise<MailThreadsResponse> {
-  const response = await fetch(`/api/mail/threads?mailbox=${mailbox}`)
+  const response = await fetch(`/api/mail/threads?mailbox=${mailbox}`, {
+    cache: "no-store",
+  })
 
   if (!response.ok) {
     throw new Error("Unable to fetch mail threads")

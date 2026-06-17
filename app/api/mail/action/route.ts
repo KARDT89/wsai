@@ -78,14 +78,6 @@ export async function POST(request: Request) {
   }
 }
 
-function targetMailboxForAction(action: ThreadAction) {
-  if (action === "trash") return "trash"
-  if (action === "untrash") return "inbox"
-  if (action === "star" || action === "unstar") return "starred"
-  if (action === "archive" || action === "spam") return "inbox"
-  return "inbox"
-}
-
 function isThreadAction(action?: string): action is ThreadAction {
   return threadActions.includes(action as ThreadAction)
 }

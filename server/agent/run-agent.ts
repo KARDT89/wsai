@@ -72,6 +72,12 @@ function labelForToolCall(name: string, rawArgs: string): string {
 }
 
 function labelForCorsairScript(code: string): string {
+  if (/gmail\.db\.(threads|messages)\.search/.test(code)) {
+    return "Searching Gmail"
+  }
+  if (/gmail\.db\.labels\.search/.test(code)) {
+    return "Reading Gmail labels"
+  }
   if (/gmail\.api\.threads\.list|gmail\.api\.messages\.list/.test(code)) {
     return "Searching Gmail"
   }
@@ -79,10 +85,24 @@ function labelForCorsairScript(code: string): string {
     return "Reading Gmail"
   }
   if (/gmail\.api\.messages\.send|gmail\.api\.drafts\.send/.test(code)) {
-    return "Requesting email send"
+    return "Sending email"
+  }
+  if (/gmail\.api\.drafts\.(create|update)/.test(code)) {
+    return "Saving email draft"
   }
   if (/gmail\.api\.(threads|messages)\.(modify|trash|delete|untrash)/.test(code)) {
-    return "Requesting email update"
+    if (/removeLabelIds:\s*\[[^\]]*["']INBOX["']/.test(code)) return "Archiving thread"
+    if (/addLabelIds:\s*\[[^\]]*["']STARRED["']/.test(code)) return "Starring thread"
+    if (/removeLabelIds:\s*\[[^\]]*["']STARRED["']/.test(code)) return "Unstarring thread"
+    if (/removeLabelIds:\s*\[[^\]]*["']UNREAD["']/.test(code)) return "Marking email read"
+    if (/addLabelIds:\s*\[[^\]]*["']UNREAD["']/.test(code)) return "Marking email unread"
+    if (/\.trash\(/.test(code)) return "Moving email to trash"
+    if (/\.delete\(/.test(code)) return "Deleting email"
+    if (/\.untrash\(/.test(code)) return "Restoring email"
+    return "Updating email"
+  }
+  if (/googlecalendar\.db\.events\.search/.test(code)) {
+    return "Fetching calendar"
   }
   if (/googlecalendar\.api\.events\.getMany/.test(code)) {
     return "Fetching calendar"
@@ -91,7 +111,10 @@ function labelForCorsairScript(code: string): string {
     return "Reading calendar event"
   }
   if (/googlecalendar\.api\.events\.(create|update|delete)/.test(code)) {
-    return "Requesting calendar change"
+    if (/\.create\(/.test(code)) return "Creating calendar event"
+    if (/\.update\(/.test(code)) return "Updating calendar event"
+    if (/\.delete\(/.test(code)) return "Deleting calendar event"
+    return "Updating calendar"
   }
   if (/googlecalendar\.api\.calendar\.getAvailability/.test(code)) {
     return "Checking availability"
@@ -121,8 +144,18 @@ You have access to Corsair tools. Use list_operations to discover available APIs
 
 - For reads and searches, prefer list_operations with type "db" (faster, uses cached data).
 - For writes and actions, use list_operations with type "api".
-- Always call get_schema before any write or destructive operation.
+- Always call get_schema before any write or destructive operation, including Gmail send/draft/reply/archive/trash/delete and Calendar create/update/delete.
+- If an operation name or argument shape is not already known from list_operations or get_schema, do not guess. Discover first.
+- On a schema or validation error, read the error and retry once with corrected parameters. On auth, missing integration, permission, or approval errors, stop and explain the required user action.
 - If an integration is not connected, tell the user to connect it at /integrations and stop.
+
+## Trust-loop proof
+
+The first product proof is Gmail and Google Calendar reliability through Corsair:
+- Gmail: search/read current mail, archive/star/mark read/trash/delete, create drafts, send replies.
+- Calendar: list/search events, check availability, create/update/delete events.
+- Direct writes should execute through Corsair when approval mode allows it. If approval is required, stop after the approval request and tell the user to review /approvals.
+- After any successful write, state exactly what changed.
 
 ## Real-time feedback
 
@@ -138,6 +171,9 @@ After getting results, go straight to the answer.
 - Filter large responses inside run_script; return only what's needed.
 - If a search returns nothing, say so and stop. Do not broaden or retry unless asked.
 - If the task depends on a missing item, do nothing and explain why.
+- For a request like "archive the newest test email", search a narrow recent inbox result first, then archive exactly that thread.
+- For reply/send requests, include the recipient and message summary in the final answer.
+- For calendar create/update/delete requests, include the event title and time in the final answer.
 
 ## Approval and safety
 

@@ -142,7 +142,7 @@ function formatCacheFreshness(value?: string | null) {
 // ─── API calls ───────────────────────────────────────────────────────────────
 
 async function fetchCalendarEvents(): Promise<CalendarEventsResponse> {
-  const r = await fetch("/api/calendar/events")
+  const r = await fetch("/api/calendar/events", { cache: "no-store" })
   if (!r.ok) throw new Error("Failed to load events")
   const data = (await r.json()) as CalendarEventsResponse
   return {
@@ -180,9 +180,9 @@ export function CalendarDashboard() {
   const eventsQuery = useQuery({
     queryKey: ["calendar", "events"],
     queryFn: fetchCalendarEvents,
-    staleTime: 30_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
+    staleTime: 5_000,
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: true,
   })
   const events = eventsQuery.data?.events ?? []
 
@@ -191,7 +191,7 @@ export function CalendarDashboard() {
   const deleteMutation = useMutation({
     mutationFn: (eventId: string) => calendarAction({ action: "delete", eventId }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["calendar", "events"] })
+      void qc.refetchQueries({ queryKey: ["calendar", "events"] })
       setSelectedEvent(null)
       toast.success("Event deleted")
     },
@@ -373,7 +373,7 @@ export function CalendarDashboard() {
 
         {/* Calendar view */}
         {eventsQuery.isPending ? (
-          <CalendarState title="Loading…" detail="Fetching events from cache." />
+          <CalendarState title="Loading…" detail="Fetching current calendar events." />
         ) : eventsQuery.isError ? (
           <CalendarState title="Error" detail="Could not load calendar events." />
         ) : view === "week" ? (
@@ -436,7 +436,7 @@ export function CalendarDashboard() {
         prefillStart={dialogState.prefillStart}
         onClose={() => setDialogState({ open: false, mode: "create" })}
         onSaved={() => {
-          void qc.invalidateQueries({ queryKey: ["calendar", "events"] })
+          void qc.refetchQueries({ queryKey: ["calendar", "events"] })
           setDialogState({ open: false, mode: "create" })
         }}
       />

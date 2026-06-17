@@ -43,7 +43,14 @@ export async function GET() {
              (b.startsAt ? new Date(b.startsAt).getTime() : 0)
     })
 
-  return Response.json({ events, cache: toCacheMetadata(syncStatus, events.length) })
+  return Response.json(
+    { events, cache: toCacheMetadata(syncStatus, events.length) },
+    {
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    }
+  )
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

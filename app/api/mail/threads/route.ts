@@ -110,22 +110,22 @@ export async function GET(request: Request) {
       .map((r) => {
         const data = asAny(r.data)
         const rawMsgs: unknown[] = Array.isArray(data?.messages) ? data.messages : []
-        const sorted = (rawMsgs as any[]).sort(
+        const sorted = rawMsgs.map(asRecord).sort(
           (a, b) => parseTs(b.internalDate) - parseTs(a.internalDate)
         )
         const latest = sorted[0] ?? {}
         const oldest = sorted[sorted.length - 1] ?? {}
         const allLabels = [
           ...new Set(
-            (rawMsgs as any[]).flatMap((m) => (Array.isArray(m.labelIds) ? m.labelIds : []) as string[])
+            sorted.flatMap((m) => (Array.isArray(m.labelIds) ? m.labelIds : []) as string[])
           ),
         ]
 
         if (labelFilter && !allLabels.includes(labelFilter)) return null
 
-        const from = getHeader(latest.payload, "From") ?? latest.from ?? ""
+        const from = String(getHeader(latest.payload, "From") ?? latest.from ?? "")
         const subject =
-          getHeader(oldest.payload, "Subject") ?? oldest.subject ?? data?.snippet ?? "(no subject)"
+          String(getHeader(oldest.payload, "Subject") ?? oldest.subject ?? data?.snippet ?? "(no subject)")
 
         const thread: MailThread = {
           id: r.entityId,
@@ -133,7 +133,7 @@ export async function GET(request: Request) {
           sender: parseName(from),
           email: parseEmail(from),
           subject,
-          snippet: data?.snippet ?? latest.snippet ?? "",
+          snippet: String(data?.snippet ?? latest.snippet ?? ""),
           time: formatTs(latest.internalDate ?? r.updatedAt.toISOString()),
           timestamp: String(latest.internalDate ?? r.updatedAt.toISOString()),
           unread: allLabels.includes("UNREAD"),
@@ -144,7 +144,7 @@ export async function GET(request: Request) {
           messages: sorted
             .slice()
             .reverse()
-            .map((m: unknown) => toMailMessage(asAny(m))),
+            .map((m) => toMailMessage(m)),
         }
         return thread
       })
@@ -153,7 +153,14 @@ export async function GET(request: Request) {
 
   threads.sort((a, b) => parseTs(b.timestamp) - parseTs(a.timestamp))
 
-  return Response.json({ threads, cache: toCacheMetadata(syncStatus, threads.length) })
+  return Response.json(
+    { threads, cache: toCacheMetadata(syncStatus, threads.length) },
+    {
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    }
+  )
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -214,6 +221,10 @@ function getHeader(payload: unknown, name: string): string | undefined {
     if (!h || typeof h !== "object") return false
     return String((h as Record<string, unknown>).name ?? "").toLowerCase() === lower
   })?.value as string | undefined
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
 
 function parseName(from: string): string {
