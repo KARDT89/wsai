@@ -79,6 +79,16 @@ export default function ApprovalsPage() {
       })
       const data = (await res.json()) as { approval?: Approval; error?: string }
       if (!res.ok) {
+        if (data.approval) {
+          setApprovals((prev) =>
+            prev.map((a) =>
+              a.id === id
+                ? { ...data.approval!, error: data.error ?? data.approval!.error ?? null }
+                : a
+            )
+          )
+          setPendingCount((c) => Math.max(0, c - 1))
+        }
         throw new Error(data.error ?? "Failed")
       }
       toast.success(

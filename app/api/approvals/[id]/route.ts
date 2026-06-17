@@ -141,10 +141,11 @@ async function handleCorsairPermission(
     const updated = { ...permission, updated_at: now }
 
     if (!ok) {
+      const errMsg = String(result.error ?? "Execution failed")
       return NextResponse.json(
         {
-          error: result.error ?? "Execution failed",
-          approval: mapCorsairPermission(updated, finalStatus),
+          error: errMsg,
+          approval: mapCorsairPermission({ ...updated, error: errMsg }, finalStatus),
         },
         { status: 500 }
       )

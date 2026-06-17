@@ -116,7 +116,15 @@ export async function POST(request: Request) {
       )
       await calendarApi.events.update({
         id: payload.eventId,
-        event: { ...current, attendees: updatedAttendees as CalendarEventInput["attendees"] },
+        event: {
+          summary: current.summary,
+          description: current.description,
+          location: current.location,
+          start: current.start,
+          end: current.end,
+          attendees: updatedAttendees,
+          recurrence: current.recurrence,
+        },
         sendUpdates: "none",
       })
       void triggerSync(session.user.id, "googlecalendar", "user_action")
