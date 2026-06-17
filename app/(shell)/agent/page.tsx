@@ -32,6 +32,7 @@ type ChatMessage = {
   role: "user" | "assistant"
   content: string
   steps?: Step[]
+  contextLabel?: string | null
 }
 
 type AgentSession = {
@@ -59,6 +60,16 @@ const SUGGESTIONS = [
   "Draft a reply to the latest email thread",
   "Search for emails with attachments",
 ]
+
+const MAILBOXES = [
+  { id: "inbox", label: "Inbox" },
+  { id: "starred", label: "Starred" },
+  { id: "sent", label: "Sent" },
+  { id: "drafts", label: "Drafts" },
+  { id: "trash", label: "Trash" },
+] as const
+
+type MailboxId = (typeof MAILBOXES)[number]["id"]
 
 function ToolSteps({ steps, streaming }: { steps: Step[]; streaming: boolean }) {
   const [expanded, setExpanded] = React.useState(false)
@@ -174,18 +185,15 @@ export default function AgentPage() {
   const [pickerOpen, setPickerOpen] = React.useState(false)
   const [threads, setThreads] = React.useState<MailThread[]>([])
   const [threadsLoading, setThreadsLoading] = React.useState(false)
+  const [threadMailbox, setThreadMailbox] = React.useState<MailboxId>("inbox")
+  const [threadSearch, setThreadSearch] = React.useState("")
 
   const msgCounter = React.useRef(0)
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
   const activeSessionIdRef = React.useRef<string | null>(null)
 
-  // Load session list on mount
-  React.useEffect(() => {
-    void loadSessionList()
-  }, [])
-
-  async function loadSessionList() {
+  const loadSessionList = React.useCallback(async () => {
     try {
       const res = await fetch("/api/agent/sessions")
       const data = (await res.json()) as { sessions: SessionListItem[] }
@@ -195,7 +203,13 @@ export default function AgentPage() {
     } finally {
       setSessionsLoaded(true)
     }
-  }
+  }, [])
+
+  // Load session list on mount
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadSessionList()
+  }, [loadSessionList])
 
   async function loadSession(id: string) {
     try {
@@ -247,19 +261,31 @@ export default function AgentPage() {
     scrollToBottom()
   }, [messages.length, scrollToBottom])
 
-  async function fetchThreads() {
-    if (threads.length > 0) return
+  async function fetchThreads(mailbox: MailboxId = threadMailbox) {
     setThreadsLoading(true)
     try {
-      const res = await fetch("/api/mail/threads?mailbox=inbox")
+      const res = await fetch(`/api/mail/threads?mailbox=${mailbox}`)
       const data = (await res.json()) as { threads: MailThread[] }
-      setThreads(data.threads?.slice(0, 20) ?? [])
+      setThreads(data.threads?.slice(0, 50) ?? [])
     } catch {
       // silent
     } finally {
       setThreadsLoading(false)
     }
   }
+
+  const filteredThreads = React.useMemo(() => {
+    const q = threadSearch.trim().toLowerCase()
+    if (!q) return threads
+
+    return threads.filter((thread) => {
+      return (
+        thread.subject.toLowerCase().includes(q) ||
+        thread.sender.toLowerCase().includes(q) ||
+        thread.snippet.toLowerCase().includes(q)
+      )
+    })
+  }, [threads, threadSearch])
 
   function attachThread(thread: MailThread) {
     const lines = [
@@ -275,6 +301,7 @@ export default function AgentPage() {
     }
     setAiContext(lines.join("\n"), thread.subject)
     setPickerOpen(false)
+    setThreadSearch("")
   }
 
   async function handleSend(overrideInput?: string) {
@@ -287,7 +314,12 @@ export default function AgentPage() {
     const userId = `u-${++msgCounter.current}`
     const assistantId = `a-${++msgCounter.current}`
 
-    const userMsg: ChatMessage = { id: userId, role: "user", content: text }
+    const userMsg: ChatMessage = {
+      id: userId,
+      role: "user",
+      content: text,
+      contextLabel,
+    }
     const assistantMsg: ChatMessage = { id: assistantId, role: "assistant", content: "", steps: [] }
 
     let sessionId = activeSessionIdRef.current
@@ -351,14 +383,14 @@ export default function AgentPage() {
     }
 
     try {
-      const fullPrompt = contextText
-        ? `Context:\n${contextText}\n\nUser message:\n${text}`
-        : text
-
       const response = await fetch("/api/agent/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: fullPrompt, model: usedModel }),
+        body: JSON.stringify({
+          prompt: text,
+          context: contextText,
+          model: usedModel,
+        }),
       })
 
       if (!response.ok || !response.body) {
@@ -600,6 +632,18 @@ export default function AgentPage() {
                                 : "rounded-tl-sm bg-muted/60 text-foreground ring-1 ring-border/50"
                             )}
                           >
+                            {msg.contextLabel ? (
+                              <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-background/15 px-2 py-1 text-[11px]">
+                                <HugeiconsIcon
+                                  icon={Attachment01Icon}
+                                  strokeWidth={2}
+                                  className="size-3 shrink-0"
+                                />
+                                <span className="truncate opacity-90">
+                                  {msg.contextLabel}
+                                </span>
+                              </div>
+                            ) : null}
                             {showDots ? (
                               <span className="inline-flex items-center gap-1.5">
                                 <span className="size-1.5 animate-bounce rounded-full bg-current opacity-60 [animation-delay:0ms]" />
@@ -626,17 +670,17 @@ export default function AgentPage() {
           </div>
         )}
 
-        {/* Thread picker backdrop */}
+        {/* Thread picker overlay */}
         {pickerOpen ? (
-          <div className="fixed inset-0 z-40" onClick={() => setPickerOpen(false)} />
-        ) : null}
-
-        {/* Input bar */}
-        <div className="relative shrink-0 border-t bg-background/80 backdrop-blur-sm">
-          {/* Thread picker popup */}
-          {pickerOpen ? (
+          <div className="pointer-events-none fixed inset-0 z-50">
+            <button
+              type="button"
+              aria-label="Close thread picker"
+              className="pointer-events-auto absolute inset-0 cursor-default"
+              onClick={() => setPickerOpen(false)}
+            />
             <div
-              className="fixed bottom-28 left-1/2 z-50 flex max-h-[min(28rem,calc(100svh-9rem))] w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl border bg-background/95 shadow-2xl backdrop-blur-xl ring-1 ring-black/5 dark:ring-white/10"
+              className="pointer-events-auto absolute bottom-28 left-1/2 flex max-h-[min(28rem,calc(100svh-9rem))] w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl ring-1 ring-black/5 dark:ring-white/10"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex shrink-0 items-center justify-between border-b px-4 py-2.5">
@@ -649,6 +693,36 @@ export default function AgentPage() {
                   <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-3.5" />
                 </button>
               </div>
+              <div className="shrink-0 space-y-2 border-b px-3 py-3">
+                <div className="flex gap-1 overflow-x-auto">
+                  {MAILBOXES.map((mailbox) => (
+                    <button
+                      key={mailbox.id}
+                      type="button"
+                      className={cn(
+                        "shrink-0 rounded-md px-2.5 py-1 text-[11px] transition-colors",
+                        threadMailbox === mailbox.id
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:text-foreground"
+                      )}
+                      onClick={() => {
+                        setThreadMailbox(mailbox.id)
+                        setThreadSearch("")
+                        void fetchThreads(mailbox.id)
+                      }}
+                    >
+                      {mailbox.label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="search"
+                  value={threadSearch}
+                  onChange={(event) => setThreadSearch(event.target.value)}
+                  placeholder={`Search ${MAILBOXES.find((item) => item.id === threadMailbox)?.label.toLowerCase() ?? "threads"}...`}
+                  className="h-8 w-full rounded-md border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
               <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                 {threadsLoading ? (
                   <div className="flex items-center justify-center py-8">
@@ -658,17 +732,15 @@ export default function AgentPage() {
                       className="size-4 animate-spin text-muted-foreground"
                     />
                   </div>
-                ) : threads.length === 0 ? (
+                ) : filteredThreads.length === 0 ? (
                   <p className="px-4 py-6 text-center text-xs text-muted-foreground">
-                    No threads found
+                    {threadSearch.trim() ? "No matching threads" : "No threads found"}
                   </p>
                 ) : (
-                  threads.map((t) => (
-                    <button
+                  filteredThreads.map((t) => (
+                    <div
                       key={t.id}
-                      type="button"
                       className="flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
-                      onClick={() => attachThread(t)}
                     >
                       <ThreadAvatar sender={t.sender} />
                       <div className="min-w-0 flex-1">
@@ -678,13 +750,25 @@ export default function AgentPage() {
                       {t.unread ? (
                         <div className="size-1.5 shrink-0 rounded-full bg-primary" />
                       ) : null}
-                    </button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        className="shrink-0"
+                        onClick={() => attachThread(t)}
+                      >
+                        Attach
+                      </Button>
+                    </div>
                   ))
                 )}
               </div>
             </div>
-          ) : null}
+          </div>
+        ) : null}
 
+        {/* Input bar */}
+        <div className="relative shrink-0 border-t bg-background/80 backdrop-blur-sm">
           <div className="mx-auto max-w-3xl px-4 py-4">
             {contextLabel ? (
               <div className="mb-2.5 flex items-center gap-2">
@@ -722,7 +806,7 @@ export default function AgentPage() {
                 onClick={() => {
                   const next = !pickerOpen
                   setPickerOpen(next)
-                  if (next) void fetchThreads()
+                  if (next) void fetchThreads(threadMailbox)
                 }}
               >
                 <HugeiconsIcon icon={Attachment01Icon} strokeWidth={2} className="size-4" />

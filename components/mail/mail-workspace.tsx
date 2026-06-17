@@ -7,6 +7,7 @@ import {
   ArchiveIcon,
   ArrowTurnForwardIcon,
   AttachmentIcon,
+  AiChat01Icon,
   Clock01Icon,
   Delete02Icon,
   InboxIcon,
@@ -334,6 +335,9 @@ export function MailWorkspace() {
 
   const handleThreadClick = (thread: MailThread) => {
     setSelectedId(thread.id)
+  }
+
+  const addThreadToAiContext = React.useCallback((thread: MailThread) => {
     const contextText = [
       `Subject: ${thread.subject}`,
       `From: ${thread.sender}${thread.email ? ` <${thread.email}>` : ""}`,
@@ -345,7 +349,8 @@ export function MailWorkspace() {
       .filter(Boolean)
       .join("\n")
     setAiContext(contextText, `Thread from ${thread.sender}`)
-  }
+    toast.success("Thread added to AI context")
+  }, [setAiContext])
 
   const openReply = (thread?: typeof selectedThread) => {
     const t = thread ?? selectedThread
@@ -758,6 +763,16 @@ export function MailWorkspace() {
           </Button>
 
           <div className="ml-auto flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!selectedThread}
+              onClick={() => selectedThread && addThreadToAiContext(selectedThread)}
+            >
+              <HugeiconsIcon icon={AiChat01Icon} strokeWidth={2} className="size-4" />
+              Use as context
+            </Button>
+
             <Button
               variant="ghost"
               size="sm"

@@ -282,14 +282,13 @@ export function AiChatFloat({ open, onClose }: Props) {
     setStreaming(true)
 
     try {
-      const fullPrompt = contextText
-        ? `Context:\n${contextText}\n\nUser message:\n${text}`
-        : text
-
       const response = await fetch("/api/agent/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: fullPrompt }),
+        body: JSON.stringify({
+          prompt: text,
+          context: contextText,
+        }),
       })
 
       if (!response.ok || !response.body) {
