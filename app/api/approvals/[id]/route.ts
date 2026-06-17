@@ -138,7 +138,9 @@ async function handleCorsairPermission(
   const finalStatus = ok ? "completed" : "failed"
 
   if (ok) {
-    await enqueueApprovalSync(tenantId, permission.plugin, permission.endpoint)
+    enqueueApprovalSync(tenantId, permission.plugin, permission.endpoint).catch((err) =>
+      console.error("[approvals] sync enqueue failed:", err)
+    )
   }
 
   await prisma.$executeRaw`

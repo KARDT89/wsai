@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server"
+import { after, NextResponse } from "next/server"
 
-import { enqueueCorsairSync } from "@/inngest/events"
 import { ensureCorsairSetup, getCorsairInstance } from "@/lib/corsair/server"
+import { syncCorsairPlugin } from "@/lib/corsair/sync"
 import { getCurrentSession } from "@/lib/session"
 
 type CalendarEventInput = {
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
         event: payload.event,
         sendUpdates: "all",
       })
-      await enqueueCalendarSync(session.user.id)
+      after(() => syncCorsairPlugin(session.user.id, "googlecalendar", "user_action"))
       return NextResponse.json({ event })
     }
 
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
         event: payload.event,
         sendUpdates: "all",
       })
-      await enqueueCalendarSync(session.user.id)
+      after(() => syncCorsairPlugin(session.user.id, "googlecalendar", "user_action"))
       return NextResponse.json({ event })
     }
 
@@ -83,7 +83,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "eventId is required for delete" }, { status: 400 })
       }
       await calendarApi.events.delete({ id: payload.eventId, sendUpdates: "all" })
-      await enqueueCalendarSync(session.user.id)
+      after(() => syncCorsairPlugin(session.user.id, "googlecalendar", "user_action"))
       return NextResponse.json({ deleted: true })
     }
 
@@ -96,10 +96,3 @@ export async function POST(request: Request) {
   }
 }
 
-function enqueueCalendarSync(tenantId: string) {
-  return enqueueCorsairSync({
-    tenantId,
-    plugin: "googlecalendar",
-    reason: "user_action",
-  })
-}

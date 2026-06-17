@@ -1,37 +1,93 @@
-import { enqueueCorsairSync } from "@/inngest/events"
-import { getCachedCalendarEventsWithCache } from "@/lib/corsair-cache"
+import { prisma } from "@/lib/db"
 import { getCurrentSession } from "@/lib/session"
-import type { CacheMetadata } from "@/lib/workspace-types"
+import { getSyncStatus, type SyncStatusMetadata } from "@/lib/sync-status"
+import type { CacheMetadata, CalendarEvent } from "@/lib/workspace-types"
 
-const STALE_CACHE_MS = 5 * 60 * 1000
+const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000
 
 export async function GET() {
   const session = await getCurrentSession()
+  if (!session) return Response.json({ error: "Unauthorized" }, { status: 401 })
 
-  if (!session) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 })
-  }
+  const [rows, syncStatus] = await Promise.all([
+    prisma.corsairEntity.findMany({
+      where: {
+        account: {
+          tenantId: session.user.id,
+          integration: { name: "googlecalendar" },
+        },
+        entityType: { in: ["events", "event"] },
+      },
+      select: { entityId: true, data: true },
+      orderBy: { updatedAt: "asc" },
+      take: 500,
+    }),
+    getSyncStatus(session.user.id, "googlecalendar"),
+  ])
 
-  const { events, cache } = await getCachedCalendarEventsWithCache(session.user.id)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const asAny = (x: unknown) => x as any
+  const minTime = Date.now() - ONE_WEEK_MS
 
-  if (shouldRefreshCache(cache)) {
-    void enqueueCorsairSync({
-      tenantId: session.user.id,
-      plugin: "googlecalendar",
-      reason: "stale_cache",
-    }).catch((error) => {
-      console.error("[calendar] Failed to enqueue stale cache sync", error)
+  const events: CalendarEvent[] = rows
+    .map((r) => {
+      const d = asAny(r.data)
+      const start = d?.start?.dateTime ?? d?.start?.date
+      if (!start) return null
+      if (new Date(start).getTime() < minTime) return null
+      return mapCalendarEvent(r.entityId, d)
     })
-  }
+    .filter((e): e is CalendarEvent => e !== null)
+    .sort((a, b) => {
+      return (a.startsAt ? new Date(a.startsAt).getTime() : 0) -
+             (b.startsAt ? new Date(b.startsAt).getTime() : 0)
+    })
 
-  return Response.json({ events, cache })
+  return Response.json({ events, cache: toCacheMetadata(syncStatus, events.length) })
 }
 
-function shouldRefreshCache(cache: CacheMetadata) {
-  if (cache.status === "running") return false
-  if (cache.status === "failed") return true
-  if (!cache.lastSyncedAt) return true
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapCalendarEvent(entityId: string, d: any): CalendarEvent {
+  const startsAt: string | undefined = d?.start?.dateTime ?? d?.start?.date
+  const endsAt: string | undefined = d?.end?.dateTime ?? d?.end?.date
 
-  const lastSyncedAt = new Date(cache.lastSyncedAt).getTime()
-  return !Number.isFinite(lastSyncedAt) || Date.now() - lastSyncedAt > STALE_CACHE_MS
+  const day = startsAt
+    ? new Date(startsAt).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })
+    : ""
+  const time = startsAt
+    ? new Date(startsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : ""
+
+  const attendees: string[] = Array.isArray(d?.attendees)
+    ? (d.attendees as { email?: string; displayName?: string }[])
+        .map((a) => a.email ?? a.displayName ?? "")
+        .filter(Boolean)
+    : []
+
+  return {
+    id: entityId,
+    corsairId: entityId,
+    title: d?.summary ?? "(no title)",
+    startsAt,
+    endsAt,
+    day,
+    time,
+    location: d?.location,
+    meetingLink: d?.hangoutLink,
+    attendees,
+    description: d?.description,
+    calendar: d?.calendarId ?? "primary",
+  }
+}
+
+function toCacheMetadata(status: SyncStatusMetadata | null, itemCount: number): CacheMetadata {
+  return {
+    lastSyncedAt: status?.lastSyncedAt ?? null,
+    lastStartedAt: status?.lastStartedAt ?? null,
+    lastFailedAt: status?.lastFailedAt ?? null,
+    lastError: status?.lastError ?? null,
+    status: status?.status ?? "idle",
+    reason: status?.reason ?? null,
+    itemCount: status?.itemCount ?? itemCount,
+  }
 }
