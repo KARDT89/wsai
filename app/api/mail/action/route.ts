@@ -1,7 +1,7 @@
-import { after, NextResponse } from "next/server"
+import { NextResponse } from "next/server"
 
+import { triggerSync } from "@/inngest/client"
 import { ensureCorsairSetup, getCorsairInstance } from "@/lib/corsair/server"
-import { syncCorsairPlugin } from "@/lib/corsair/sync"
 import { getCurrentSession } from "@/lib/session"
 
 const threadActions = [
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
     await ensureCorsairSetup(session.user.id)
     const gmail = getCorsairInstance().withTenant(session.user.id).gmail.api
     const result = await runThreadAction(gmail, payload.threadId, payload.action, payload.labelId)
-    after(() => syncCorsairPlugin(session.user.id, "gmail", "user_action"))
+    void triggerSync(session.user.id, "gmail", "user_action")
 
     return NextResponse.json({ thread: result })
   } catch (error) {

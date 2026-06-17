@@ -90,10 +90,19 @@ export function MailWorkspace() {
   const threadsQuery = useQuery({
     queryKey: ["mail", "threads", selectedMailbox],
     queryFn: () => fetchMailThreads(selectedMailbox),
-    staleTime: 5_000,
-    refetchInterval: 5_000,
-    refetchIntervalInBackground: true,
+    staleTime: 30_000,
   })
+
+  React.useEffect(() => {
+    const es = new EventSource("/api/realtime/stream")
+    es.addEventListener("sync-complete", (e) => {
+      const data = JSON.parse(e.data) as { plugin: string; status: string }
+      if (data.plugin === "gmail" && data.status === "success") {
+        void queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })
+      }
+    })
+    return () => es.close()
+  }, [queryClient])
 
   const threads = React.useMemo(
     () => threadsQuery.data?.threads ?? [],
@@ -878,6 +887,7 @@ export function MailWorkspace() {
         onChange={setCompose}
         onSend={() => sendMutation.mutate(compose)}
         onSaveDraft={() => draftMutation.mutate(compose)}
+        thread={selectedThread ?? undefined}
       />
     </div>
   )
@@ -1040,6 +1050,7 @@ function ComposeDialog({
   onChange,
   onSend,
   onSaveDraft,
+  thread,
 }: {
   open: boolean
   title: string
@@ -1050,8 +1061,26 @@ function ComposeDialog({
   onChange: (value: ComposeState) => void
   onSend: () => void
   onSaveDraft: () => void
+  thread?: MailThread
 }) {
+  const [isDrafting, setIsDrafting] = React.useState(false)
   const disabled = isSending || isSavingDraft
+
+  async function draftWithAi() {
+    if (!thread) return
+    setIsDrafting(true)
+    try {
+      const res = await fetch("/api/mail/draft-ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thread }),
+      })
+      const data = await res.json() as { draft?: string; error?: string }
+      if (data.draft) onChange({ ...value, body: data.draft })
+    } finally {
+      setIsDrafting(false)
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1112,6 +1141,17 @@ function ComposeDialog({
           </div>
         </div>
         <DialogFooter>
+          {thread && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={disabled || isDrafting}
+              onClick={() => void draftWithAi()}
+              className="mr-auto"
+            >
+              {isDrafting ? "Drafting..." : "Draft with AI"}
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"

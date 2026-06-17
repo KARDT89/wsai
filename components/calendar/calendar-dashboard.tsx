@@ -180,10 +180,19 @@ export function CalendarDashboard() {
   const eventsQuery = useQuery({
     queryKey: ["calendar", "events"],
     queryFn: fetchCalendarEvents,
-    staleTime: 5_000,
-    refetchInterval: 5_000,
-    refetchIntervalInBackground: true,
+    staleTime: 30_000,
   })
+
+  React.useEffect(() => {
+    const es = new EventSource("/api/realtime/stream")
+    es.addEventListener("sync-complete", (e) => {
+      const data = JSON.parse(e.data) as { plugin: string; status: string }
+      if (data.plugin === "googlecalendar" && data.status === "success") {
+        void qc.invalidateQueries({ queryKey: ["calendar", "events"] })
+      }
+    })
+    return () => es.close()
+  }, [qc])
   const events = eventsQuery.data?.events ?? []
 
   const cacheLabel = formatCacheStatus(eventsQuery.data?.cache)

@@ -1,8 +1,9 @@
 import { processWebhook } from "corsair"
-import { after, NextResponse, type NextRequest } from "next/server"
+import { NextResponse, type NextRequest } from "next/server"
 
+import { triggerSync } from "@/inngest/client"
 import { getCorsairInstance, isKnownCorsairPlugin } from "@/lib/corsair/server"
-import { isSyncableCorsairPlugin, syncCorsairPlugin } from "@/lib/corsair/sync"
+import { isSyncableCorsairPlugin } from "@/lib/corsair/sync"
 
 export const runtime = "nodejs"
 
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
     isSyncableCorsairPlugin(result.plugin)
   ) {
     const plugin = result.plugin as "gmail" | "googlecalendar"
-    after(() => syncCorsairPlugin(tenantId, plugin, "webhook"))
+    void triggerSync(tenantId, plugin, "webhook")
   }
 
   const response = result.response ?? { success: Boolean(result.plugin) }

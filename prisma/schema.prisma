@@ -27,7 +27,7 @@ model User {
   syncStatuses   SyncStatus[]
   agentSessions    AgentSession[]
   settings         UserSettings?
-  approvalRequests ApprovalRequest[]
+
 
   @@unique([email])
   @@map("user")
@@ -207,7 +207,7 @@ model UserSettings {
   apiKeyProvider String? // "openrouter" | "openai" | "anthropic"
   apiKey         String? // user-supplied key (store encrypted in production)
   aiTone         String  @default("professional") // "professional" | "casual" | "concise"
-  approvalStrict String  @default("never") // "all" | "writes" | "never"
+  approvalStrict String  @default("writes") // "all" | "writes" | "never"
   emailSignature String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -215,22 +215,3 @@ model UserSettings {
   @@map("user_settings")
 }
 
-model ApprovalRequest {
-  id             String    @id @default(cuid())
-  userId         String
-  agentSessionId String?
-  plugin         String
-  operation      String
-  description    String
-  inputJson      Json
-  status         String    @default("pending")
-  decidedAt      DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([status])
-  @@map("approval_requests")
-}

@@ -1,0 +1,292 @@
+# WSAI: Full Gap Closure Plan
+
+## Context
+
+Building a personal Gmail + Google Calendar replacement (Superhuman-style) where the success bar is: **never need to open Gmail or Google Calendar again**. The app already has a working inbox, calendar, AI chat, and approvals flow. This plan closes every remaining gap in one sweep.
+
+**Priority order confirmed by user:**
+1. Real-time data (currently 5-second polling — feels stale)
+2. AI delegation end-to-end (already functional, default needs to change)
+3. Gmail completeness (reply-all, snooze, labels, keyboard shortcuts, search, attachments)
+4. Calendar completeness (RSVP, conflict detection, drag-to-reschedule)
+
+---
+
+## Key Discoveries (Don't Re-derive)
+
+- **Approvals flow is already complete.** AI writes gate through Corsair permissions → `/approvals` page → execute. The Prisma `ApprovalRequest` model is dead code — real data lives in `corsair_permissions`.
+- **Inngest is installed but empty.** `inngest/functions.ts` exports `[]`. Route at `/api/inngest` exists.
+- **SSE directory is empty.** `app/api/realtime/` exists but has no files. Both mail and calendar use `refetchInterval: 5_000`.
+- **Send invites already works.** Calendar `create`/`update` already passes `sendUpdates: "all"` — attendees get emails. Gap is just a misleading toast message.
+- **`@dnd-kit/core` is already installed** and used in `data-table.tsx`.
+- **Corsair Gmail plugin has no `messages.attachments.get`.** Attachment download must call `messages.get` and extract `body.data` from the matching part (works for inline/small attachments; large attachments need direct Gmail REST with user token).
+
+---
+
+## What the AI Actually Does (The USP)
+
+The AI agent connects to Corsair MCP and has full access to every Gmail and Google Calendar operation Corsair exposes — read, write, search, draft, send, create event, update event, RSVP, delete, label, everything. This is the core differentiator: the agent is not a chatbot with hardcoded tools, it's a programmable operator with the same API surface as the full integration.
+
+**Success criteria for AI:**
+> User says "send a calendar invite to X at 9am Thursday, and email them saying I look forward to our meeting" → agent creates the event with attendee, sends the email, and both appear in the inbox and calendar instantly — without the user opening Gmail or Google Calendar.
+
+**Model preference:** Cheap fast models by default. Use `gpt-4o-mini` (or equivalent via OpenRouter) for drafting and classification. Use `gpt-4o` only when the user explicitly configures it.
+
+---
+
+## Implementation Phases
+
+### Phase 0 — Quick Wins (do first, no risk)
+
+**0a. Change default `approvalStrict` from `"never"` to `"writes"`**
+- File: `prisma/migrations/` — new migration changing default
+- File: `prisma/schema.prisma` line ~210 — change `@default("never")` to `@default("writes")`
+- New users get confirmation-on-writes by default; existing users unaffected (DB default only applies to new rows)
+
+**0b. Remove dead `ApprovalRequest` model**
+- File: `prisma/schema.prisma` lines 218–236 — delete the `ApprovalRequest` model block
+- File: `prisma/schema.prisma` — also remove the `approvalRequests ApprovalRequest[]` relation line from the `User` model (line ~30); Prisma requires both sides of a relation to be removed together or migration will fail
+- File: `prisma/migrations/` — new migration to drop `approval_requests` table
+
+---
+
+### Phase 1 — Webhooks → Inngest (P0)
+
+**Goal:** Guaranteed, retryable sync on every Corsair push event.
+
+**1a. Define Inngest functions** — `inngest/functions.ts`
+
+Use **two separate event names** (not one shared event with plugin discrimination) to avoid double-invocation overhead and silent no-ops on typos:
+```ts
+export const syncGmail = inngest.createFunction(
+  { id: "sync-gmail", retries: 4 },
+  { event: "corsair/gmail.sync.requested" },
+  async ({ event }) => syncCorsairPlugin(event.data.tenantId, "gmail", event.data.reason)
+)
+
+export const syncCalendar = inngest.createFunction(
+  { id: "sync-calendar", retries: 4 },
+  { event: "corsair/calendar.sync.requested" },
+  async ({ event }) => syncCorsairPlugin(event.data.tenantId, "googlecalendar", event.data.reason)
+)
+
+export const functions = [syncGmail, syncCalendar]
+```
+Note: `retries` takes a plain integer, not `{ attempts: N }`. `app/api/inngest/route.ts` needs no changes — it already imports `functions`.
+
+**1b. Update webhook handler** — `app/api/corsair/webhook/route.ts`
+Replace:
+```ts
+after(() => syncCorsairPlugin(tenantId, plugin, "webhook"))
+```
+With:
+```ts
+const eventName = plugin === "gmail"
+  ? "corsair/gmail.sync.requested"
+  : "corsair/calendar.sync.requested"
+await inngest.send({ name: eventName, data: { tenantId, reason: "webhook" } })
+```
+`inngest.send()` is a fast HTTP call (~5-20ms) — no need to keep the `after()` wrapper.
+
+**Production note:** Add `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` to env vars before deploying. Local dev uses `INNGEST_DEV=1` (no keys needed).
+
+---
+
+### Phase 2 — SSE Realtime Push (P0)
+
+**Goal:** Browser receives push notification when sync completes → React Query invalidates → inbox updates instantly.
+
+**2a. Create SSE endpoint** — `app/api/realtime/stream/route.ts` (new file)
+- `export const dynamic = "force-dynamic"` + `export const runtime = "nodejs"`
+- Opens a `ReadableStream` that polls `sync_status` table every 2 seconds per connection
+- Tracks `{ updatedAt, status }` per plugin in memory within the connection (self-contained, no global state)
+- Emits `event: sync-complete\ndata: { plugin, status, updatedAt }` only when `updated_at` advances **AND** the new status is `"success"` or `"failed"` — not on `"running"` transitions (avoids spurious invalidations mid-sync)
+- Heartbeat `ping` event every 25 seconds to prevent proxy timeouts
+- Cleans up on `request.signal.abort` (client disconnect)
+- Auth via existing `getCurrentSession()` — EventSource sends cookies automatically
+
+**2b. Update mail client** — `components/mail/mail-workspace.tsx` lines 90–96
+- Remove `refetchInterval: 5_000` and `refetchIntervalInBackground: true`
+- Add `useEffect` that opens `new EventSource("/api/realtime/stream")`
+- On `sync-complete` for plugin `"gmail"`: `queryClient.invalidateQueries({ queryKey: ["mail", "threads"] })`
+- Cleanup: `return () => es.close()`
+
+**2c. Update calendar client** — `components/calendar/calendar-dashboard.tsx` lines 180–186
+- Same pattern — EventSource, listen for `"googlecalendar"`, invalidate `["calendar", "events"]`
+
+> **Note:** Two simultaneous EventSource connections (mail + calendar both mounted) means two DB poll loops per user. Fine for now. If needed later, extract a shared `useSyncStream` hook with a module-level singleton.
+
+---
+
+### Phase 2.5 — AI Capabilities (The USP)
+
+**2.5a. Verify full Corsair MCP tool surface**
+- Read `server/agent/run-agent.ts` and confirm the agent receives ALL Corsair tools for Gmail + Calendar (not a filtered subset)
+- If any tools are excluded or scoped down, remove the restrictions — the agent should have the same API surface as the full Corsair integration
+- Verify the system prompt instructs the agent to use Corsair tools for all email and calendar tasks, not just "simple" ones
+
+**2.5b. Set cheap model as default**
+- Default agent model: `google/gemini-2.0-flash` (already set per memory) or `openai/gpt-4o-mini` via OpenRouter — confirm in `server/agent/run-agent.ts` or `lib/agent-models.ts`
+- AI draft button (below) also uses the cheap model
+- Expensive model (`gpt-4o`, `claude-opus`) only via user's own API key in settings
+
+**2.5c. Inline AI draft button in compose/reply**
+
+This is the highest-leverage AI feature for daily use. When composing or replying, a single button asks the AI to draft the message based on thread context.
+
+- `components/mail/mail-workspace.tsx` (compose dialog): Add a "Draft with AI" button next to the compose body textarea
+- On click: POST to a new `app/api/mail/draft-ai/route.ts` endpoint
+- Endpoint sends the thread context (subject, last 3 messages, user's tone from settings) to the LLM, returns a draft string
+- Draft populates the compose body — user edits and sends
+- Use cheap model (`gpt-4o-mini`) — this is a fast, high-frequency operation
+- System prompt for drafting: "You are drafting an email reply for the user. Match their tone. Be concise. Do not add pleasantries they didn't ask for."
+
+**2.5d. Post-action real-time UI update (AI writes → instant inbox refresh)**
+
+When the AI agent executes a write (send email, create event, delete, etc.) — either immediately or after the user approves at `/approvals` — the inbox and calendar must update without a page refresh. This is the loop that makes the AI feel instant.
+
+- The approval execution route (`app/api/approvals/[id]/route.ts`) already calls `syncCorsairPlugin()` after approve — verify this triggers the Inngest sync (after Phase 1 is done)
+- With the SSE stream from Phase 2 active, the UI will automatically invalidate React Query and refetch within 2 seconds of the sync completing
+- **This means Phase 1 (Inngest) + Phase 2 (SSE) are prerequisites for the AI to feel instant**
+- No additional code needed here — just verify the chain works end-to-end: approve → sync → SSE event → React Query invalidate → UI updates
+
+**2.5e. AI action visibility in chat**
+
+The agent chat (float + `/agent` page) should clearly show what Corsair tools were called and what happened — not just a text response. This already exists (tool-call visualization is in `ai-chat-float.tsx`) but verify:
+- Tool call names are human-readable (not raw Corsair endpoint strings)
+- After a write is executed, the agent confirms with a summary ("Email sent to X. Calendar invite created for Thursday 9am.")
+- If approval is needed, the agent message links directly to `/approvals` so the user can approve in one click
+
+---
+
+### Phase 3 — Gmail Gaps (P1)
+
+Build in this order (each is self-contained):
+
+**3a. Reply-All** — Low effort
+- `lib/workspace-types.ts`: Add `to?: string` and `cc?: string` to `MailMessage`
+- `app/api/mail/threads/route.ts`: Extract `To`/`Cc` headers in `toMailMessage()`
+- `components/mail/mail-workspace.tsx`: Add `openReplyAll()` function that collects all recipients from the latest message's `to` + `cc` fields (excluding current user), opens compose with those addresses
+
+**3b. Keyboard shortcuts** — Low effort (depends on 3a for reply-all function)
+- `components/mail/mail-workspace.tsx` in existing `onKeyDown` handler:
+  - `r` → `openReply()`
+  - `a` → `openReplyAll()`
+  - `f` → `openForward()`
+  - `c` → open blank compose
+- Update the shortcuts legend in the sidebar
+
+**3c. Snooze** — Medium effort
+- **Important:** `SNOOZED` is not a standard Gmail REST API label ID. Gmail's native snooze is managed by Google Assistant/Tasks, not the standard labels API. Implementation options:
+  - **Option A (recommended):** Create a custom `WSAI_SNOOZED` label on first use (`labels.create`), apply it and remove `INBOX`. Thread visually disappears from inbox. No un-snooze timer — user manually moves back. Simple and honest about the limitation.
+  - **Option B:** Skip snooze entirely and build a scheduled un-snooze later via Inngest cron.
+- `app/api/mail/action/route.ts`: Add `"snooze"` action → create `WSAI_SNOOZED` label if it doesn't exist, then `threads.modify({ addLabelIds: [wsaiSnoozedId], removeLabelIds: ["INBOX"] })`
+- `components/mail/mail-workspace.tsx`: Snooze button with `Popover` + `Calendar` date picker in action bar. On date select, fire snooze action and optimistically remove thread from inbox view. Show a note: "Thread moved to Snoozed — no automatic wake-up yet."
+
+**3d. Label UI** — Medium effort
+- New `app/api/mail/labels/route.ts`: GET endpoint calling `gmail.labels.list({})`, returns user labels only (filter `type === "user"`)
+- `components/mail/mail-workspace.tsx`: Labels query + `DropdownMenu` in action bar. Each label item toggles `label`/`unlabel` action (already implemented in action route). Show checkmark on applied labels.
+- Reuse existing `"label"` and `"unlabel"` actions — no backend changes needed
+
+**3e. Server-side search** — Medium effort
+- New `app/api/mail/search/route.ts`: GET `?q=` → `gmail.api.threads.list({ q, maxResults: 20 })` → `threads.get` each → inline transformation (same mapping as `threads/route.ts`). **Do not refactor/extract shared helpers first** — the extraction adds risk to the production route with no user-visible benefit. Acceptable duplication for a single endpoint.
+- `components/mail/mail-workspace.tsx`: Debounce search query (400ms) → fire server-side query → show results. Fall back to local filter while server result loads. Supports Gmail operators (`from:`, `subject:`, `has:attachment`, etc.)
+
+**3f. Attachment download** — Medium-High effort
+- `lib/workspace-types.ts`: Add `MailAttachment` type + `attachments: MailAttachment[]` to `MailMessage`
+- `app/api/mail/threads/route.ts`: Add `extractAttachments()` that walks `payload.parts` recursively, extracts `{ attachmentId, messageId, filename, mimeType, size }` for parts with `body.attachmentId`
+- New `app/api/mail/attachment/route.ts`: GET `?messageId=&attachmentId=&filename=` → `gmail.messages.get({ id: messageId, format: "full" })` → find matching part → return `body.data` as binary download. **For large attachments where `body.data` is absent:** return a clear `{ error: "attachment_too_large" }` response — do not silently fail.
+- `components/mail/mail-workspace.tsx`: Only render attachment chips for parts where data will be available. On download failure, show a toast "Attachment too large to download from this app — open in Gmail." Exclude `attachmentId`-only parts from the rendered chip list server-side if possible.
+
+---
+
+### Phase 4 — Calendar Gaps (P2)
+
+**4a. Extend type + map** — prerequisite for RSVP (do first)
+- `lib/workspace-types.ts`: Add `CalendarAttendee` type with `{ email, displayName?, responseStatus?, self?, organizer? }`. Add `attendeeDetails: CalendarAttendee[]`, `myResponseStatus?`, `iAmOrganizer?` to `CalendarEvent`.
+- `app/api/calendar/events/route.ts`: Populate new fields in `mapCalendarEvent()` from the Corsair event attendee objects.
+
+**4b. RSVP** — Low effort (depends on 4a)
+- `app/api/calendar/action/route.ts`: Add `"rsvp"` action → fetch current event via `events.get` → update matching attendee's `responseStatus` → call `events.update` with `sendUpdates: "none"` (no need to re-invite others)
+- `components/calendar/calendar-dashboard.tsx`: Add Accept/Maybe/Decline buttons in `EventDetailPanel` (lines 807–897). Only show when `!event.iAmOrganizer`. Highlight current status. Optimistic UI update.
+
+**4c. Send invites UX** — Trivial (2-line fix)
+- `components/calendar/calendar-dashboard.tsx`: Change success toast to "Event created and invites sent" / "Event updated and invites sent" when `form.attendees` is non-empty. **No backend changes** — invites already fire via `sendUpdates: "all"`.
+
+**4d. Conflict detection** — Low effort (client-side only)
+- `components/calendar/calendar-dashboard.tsx`: Pass `events` array to `EventDialog`. In dialog, compute conflicts reactively when start/end changes: find events with overlapping `[startAt, endAt]` ranges (skip all-day, skip self when editing). Show yellow warning banner in dialog — allow saving anyway.
+
+**4e. Drag-to-reschedule** — Medium-High effort
+- Uses already-installed `@dnd-kit/core` (`useDraggable`, `useDroppable`, `DndContext`, `DragOverlay`)
+- Wrap WeekView and DayView in `DndContext` with `onDragEnd` handler
+- Make each day-column a `useDroppable` zone; make each event button `useDraggable`
+- `onDragEnd`: compute `minutesDelta = round(delta.y / HOUR_HEIGHT * 60 / 15) * 15` (15-min snap); adjust start/end by delta; call `calendarAction({ action: "update", ... })` + optimistic cache update
+- `DragOverlay`: renders ghost event at cursor position during drag
+- Month view excluded from drag (event blocks too small, time semantics ambiguous)
+- **Simpler fallback if deferred:** "Quick reschedule" popover with just start/end time fields in EventDetailPanel — covers 80% of use case in ~2 hours
+
+---
+
+## Critical Files
+
+| File | Change |
+|------|--------|
+| `server/agent/run-agent.ts` | Verify full Corsair MCP tool surface; set cheap default model |
+| `app/api/mail/draft-ai/route.ts` | New: AI drafts email reply from thread context |
+| `app/api/approvals/[id]/route.ts` | Verify approve → Inngest sync → SSE update chain |
+| `inngest/functions.ts` | Define `syncGmail`, `syncCalendar` functions |
+| `app/api/corsair/webhook/route.ts` | Replace `after()` with `inngest.send()` |
+| `app/api/realtime/stream/route.ts` | New SSE endpoint |
+| `components/mail/mail-workspace.tsx` | SSE subscription, reply-all, snooze, label UI, search, keyboard shortcuts |
+| `components/calendar/calendar-dashboard.tsx` | SSE subscription, RSVP, conflict detection, drag-to-reschedule |
+| `app/api/mail/action/route.ts` | Add `snooze` action |
+| `app/api/mail/labels/route.ts` | New: list user labels |
+| `app/api/mail/search/route.ts` | New: Corsair Gmail search |
+| `app/api/mail/attachment/route.ts` | New: attachment download |
+| `app/api/calendar/action/route.ts` | Add `rsvp` action |
+| `app/api/calendar/events/route.ts` | Populate `attendeeDetails`, `myResponseStatus`, `iAmOrganizer` |
+| `lib/workspace-types.ts` | Add `MailAttachment`, `CalendarAttendee`, extend `MailMessage` + `CalendarEvent` |
+| `lib/mail/transform.ts` | New: extract shared thread/message mapping helpers |
+| `prisma/schema.prisma` | Change approval default, remove `ApprovalRequest` model |
+
+---
+
+## Evaluation Criteria
+
+A great result means **all of the following pass**:
+
+| # | Test | Pass condition |
+|---|------|---------------|
+| **AI** | | |
+| 1 | AI compound action | "Send a calendar invite to X at 9am Thursday and email them saying I look forward to it" → agent creates event + sends email → both appear in inbox and calendar instantly |
+| 2 | AI draft | Click "Draft with AI" in compose/reply → body is populated with a contextually correct draft in the user's tone |
+| 3 | AI post-action refresh | After approving an AI write action → inbox/calendar updates without page refresh within 5 seconds |
+| 4 | Full tool surface | Ask agent to do any supported Corsair operation (search, label, RSVP, delete, etc.) → it executes correctly |
+| **Infrastructure** | | |
+| 5 | Real-time email | Trigger a Corsair webhook manually → thread appears in inbox without page refresh |
+| 6 | Real-time calendar | Same as above for calendar event |
+| 7 | Approval default | New `UserSettings` row has `approvalStrict = "writes"` (verify in Prisma Studio) |
+| **Gmail** | | |
+| 8 | Reply-All | Reply-all compose populates To field with all recipients, not just original sender |
+| 9 | Snooze | Snooze button moves thread out of inbox; thread visible in Snoozed mailbox |
+| 10 | Keyboard | Navigate inbox, open thread, reply, archive, compose — mouse never touched (test live) |
+| 11 | Labels | Dropdown shows user labels; toggling one applies/removes it and thread label list updates |
+| 12 | Search | `from:alice@example.com` in search box returns server-side Gmail results (not just client-filtered) |
+| 13 | Attachments | Attachment chip renders on messages with inline data; clicking downloads the file; large attachments show "open in Gmail" message |
+| **Calendar** | | |
+| 14 | RSVP | Accept/Decline/Maybe buttons appear on events you didn't organize; status updates after clicking |
+| 15 | Conflict warning | Creating event overlapping an existing event shows a yellow warning in the dialog |
+| 16 | Drag reschedule | Can drag an event to a new time slot in week/day view; event time updates after drop |
+
+**North-star goal (not a pass/fail test):** Use the app as the sole Gmail + Google Calendar interface for one full working day.
+
+---
+
+## What This Does NOT Include
+
+- Mobile/responsive design
+- Team / multi-user features
+- Recurring event editing (series management)
+- Unsubscribe handling, read receipts, scheduled send
+- GitHub / Slack modules (future phases per plan.md)
+- Large attachment download (>1MB attachments that require direct Gmail REST — document as limitation)

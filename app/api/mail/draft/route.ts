@@ -1,7 +1,7 @@
-import { after, NextResponse } from "next/server"
+import { NextResponse } from "next/server"
 
+import { triggerSync } from "@/inngest/client"
 import { ensureCorsairSetup, getCorsairInstance } from "@/lib/corsair/server"
-import { syncCorsairPlugin } from "@/lib/corsair/sync"
 import { createRfc822Message, encodeBase64Url } from "@/lib/mail/mime"
 import { getCurrentSession } from "@/lib/session"
 
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
         },
       })
 
-    after(() => syncCorsairPlugin(session.user.id, "gmail", "user_action"))
+    void triggerSync(session.user.id, "gmail", "user_action")
 
     return NextResponse.json({ draft: result })
   } catch (error) {
