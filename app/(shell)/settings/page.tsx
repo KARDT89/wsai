@@ -5,15 +5,21 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Cancel01Icon,
   CheckmarkCircle01Icon,
+  Delete02Icon,
+  Database01Icon,
   EyeIcon,
   EyeOffIcon,
   Key01Icon,
+  Logout01Icon,
+  Mail01Icon,
   SaveIcon,
   Settings05Icon,
+  Shield01Icon,
   UserCircle02Icon,
 } from "@hugeicons/core-free-icons"
 import { toast } from "sonner"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
@@ -30,8 +36,51 @@ type Settings = {
   hasApiKey: boolean
 }
 
+type AccountOverview = {
+  user: {
+    id: string
+    name: string
+    email: string
+    emailVerified: boolean
+    image: string | null
+    createdAt: string
+    updatedAt: string
+  }
+  authAccounts: Array<{
+    id: string
+    providerId: string
+    accountId: string
+    scope: string | null
+    createdAt: string
+    updatedAt: string
+  }>
+  sessions: Array<{
+    id: string
+    createdAt: string
+    updatedAt: string
+    expiresAt: string
+    ipAddress: string | null
+    userAgent: string | null
+    current: boolean
+  }>
+  integrations: Array<{
+    id: string
+    plugin: string
+    connected: boolean
+    createdAt: string
+    updatedAt: string
+    cachedEntities: number
+  }>
+  security: {
+    pendingApprovals: number
+    sessionCount: number
+    authMethodCount: number
+    integrationCount: number
+  }
+}
+
 export default function SettingsPage() {
-  const [tab, setTab] = React.useState<Tab>("api")
+  const [tab, setTab] = React.useState<Tab>("account")
   const [settings, setSettings] = React.useState<Settings | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
@@ -46,12 +95,7 @@ export default function SettingsPage() {
   const [approvalStrict, setApprovalStrict] = React.useState("writes")
   const [emailSignature, setEmailSignature] = React.useState("")
 
-  React.useEffect(() => {
-    void loadSettings()
-  }, [])
-
-  async function loadSettings() {
-    setLoading(true)
+  const loadSettings = React.useCallback(async () => {
     try {
       const res = await fetch("/api/settings")
       const data = (await res.json()) as { settings: Settings; hasApiKey: boolean }
@@ -65,7 +109,12 @@ export default function SettingsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadSettings()
+  }, [loadSettings])
 
   async function saveApiKey() {
     setSaving(true)
@@ -439,16 +488,435 @@ function PreferencesTab({
 }
 
 function AccountTab() {
+  const [overview, setOverview] = React.useState<AccountOverview | null>(null)
+  const [loading, setLoading] = React.useState(true)
+  const [saving, setSaving] = React.useState(false)
+  const [deleting, setDeleting] = React.useState(false)
+  const [name, setName] = React.useState("")
+  const [image, setImage] = React.useState("")
+  const [deleteConfirm, setDeleteConfirm] = React.useState("")
+
+  const loadAccount = React.useCallback(async () => {
+    try {
+      const response = await fetch("/api/account")
+      if (!response.ok) {
+        throw new Error(await getAccountError(response, "Unable to load account"))
+      }
+      const data = (await response.json()) as AccountOverview
+      setOverview(data)
+      setName(data.user.name)
+      setImage(data.user.image ?? "")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to load account")
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadAccount()
+  }, [loadAccount])
+
+  async function saveProfile() {
+    setSaving(true)
+    try {
+      const response = await fetch("/api/account", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, image: image || null }),
+      })
+      if (!response.ok) {
+        throw new Error(await getAccountError(response, "Unable to save profile"))
+      }
+      const data = (await response.json()) as { user: AccountOverview["user"] }
+      setOverview((current) => (current ? { ...current, user: data.user } : current))
+      toast.success("Profile updated")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to save profile")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function revokeSession(sessionId: string, current: boolean) {
+    try {
+      const response = await fetch(`/api/account/sessions/${sessionId}`, {
+        method: "DELETE",
+      })
+      if (!response.ok) {
+        throw new Error(await getAccountError(response, "Unable to revoke session"))
+      }
+
+      if (current) {
+        window.location.assign("/login")
+        return
+      }
+
+      setOverview((value) =>
+        value
+          ? {
+              ...value,
+              sessions: value.sessions.filter((session) => session.id !== sessionId),
+              security: {
+                ...value.security,
+                sessionCount: Math.max(0, value.security.sessionCount - 1),
+              },
+            }
+          : value
+      )
+      toast.success("Session revoked")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to revoke session")
+    }
+  }
+
+  async function deleteAccount() {
+    setDeleting(true)
+    try {
+      const response = await fetch("/api/account", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirmEmail: deleteConfirm }),
+      })
+      if (!response.ok) {
+        throw new Error(await getAccountError(response, "Unable to delete account"))
+      }
+      toast.success("Account deleted")
+      window.location.assign("/login")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to delete account")
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  const canSaveProfile =
+    overview !== null &&
+    (name.trim() !== overview.user.name || image.trim() !== (overview.user.image ?? ""))
+  const canDelete = deleteConfirm.trim().toLowerCase() === overview?.user.email.toLowerCase()
+
   return (
-    <div className="max-w-2xl space-y-8">
+    <div className="max-w-4xl space-y-8">
       <SectionHeader
         icon={<HugeiconsIcon icon={UserCircle02Icon} strokeWidth={2} className="size-4 text-muted-foreground" />}
         title="Account"
-        description="Manage your profile and authentication settings."
+        description="Manage your profile, login methods, active sessions, connected data, and account lifecycle."
       />
-      <p className="text-sm text-muted-foreground">
-        Profile management is handled through BetterAuth. More controls coming soon.
-      </p>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="size-4 animate-spin rounded-full border-2 border-muted border-t-foreground" />
+          Loading account…
+        </div>
+      ) : overview ? (
+        <>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <AccountMetric label="Auth methods" value={overview.security.authMethodCount} />
+            <AccountMetric label="Sessions" value={overview.security.sessionCount} />
+            <AccountMetric label="Integrations" value={overview.security.integrationCount} />
+            <AccountMetric label="Pending approvals" value={overview.security.pendingApprovals} />
+          </div>
+
+          <SettingsPanel
+            icon={UserCircle02Icon}
+            title="Profile"
+            description="This name and avatar are used throughout your workspace."
+          >
+            <div className="grid gap-4 sm:grid-cols-[72px_1fr]">
+              <div className="flex size-16 items-center justify-center overflow-hidden rounded-md border bg-muted text-lg font-semibold">
+                {image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={image} alt={name} className="size-full object-cover" />
+                ) : (
+                  getInitials(name || overview.user.email)
+                )}
+              </div>
+              <div className="grid gap-3">
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium" htmlFor="account-name">
+                    Display name
+                  </label>
+                  <Input
+                    id="account-name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium" htmlFor="account-avatar">
+                    Avatar URL
+                  </label>
+                  <Input
+                    id="account-avatar"
+                    value={image}
+                    onChange={(event) => setImage(event.target.value)}
+                    placeholder="https://..."
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs text-muted-foreground">
+                    Joined {formatDate(overview.user.createdAt)}
+                  </div>
+                  <Button
+                    type="button"
+                    className="gap-2"
+                    disabled={!canSaveProfile || saving}
+                    onClick={saveProfile}
+                  >
+                    <HugeiconsIcon icon={SaveIcon} strokeWidth={2} className="size-4" />
+                    {saving ? "Saving…" : "Save profile"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </SettingsPanel>
+
+          <SettingsPanel
+            icon={Mail01Icon}
+            title="Email and login"
+            description="Your primary identity and the sign-in providers attached to it."
+          >
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-md border px-3 py-2.5">
+              <div>
+                <div className="text-sm font-medium">{overview.user.email}</div>
+                <div className="text-xs text-muted-foreground">Primary email</div>
+              </div>
+              <Badge variant={overview.user.emailVerified ? "default" : "outline"}>
+                {overview.user.emailVerified ? "Verified" : "Unverified"}
+              </Badge>
+            </div>
+            <div className="divide-y rounded-md border">
+              {overview.authAccounts.length > 0 ? (
+                overview.authAccounts.map((account) => (
+                  <div key={account.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <div>
+                      <div className="text-sm font-medium">
+                        {formatProviderName(account.providerId)}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Added {formatDate(account.createdAt)}
+                      </div>
+                    </div>
+                    <Badge variant="outline">{account.scope ? "Scoped" : "Connected"}</Badge>
+                  </div>
+                ))
+              ) : (
+                <div className="px-3 py-2.5 text-sm text-muted-foreground">
+                  No linked auth providers found.
+                </div>
+              )}
+            </div>
+          </SettingsPanel>
+
+          <SettingsPanel
+            icon={Database01Icon}
+            title="Connected data"
+            description="Corsair-backed integrations and cached entity counts for this workspace."
+          >
+            <div className="divide-y rounded-md border">
+              {overview.integrations.length > 0 ? (
+                overview.integrations.map((integration) => (
+                  <div key={integration.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                    <div>
+                      <div className="text-sm font-medium">
+                        {formatIntegrationName(integration.plugin)}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {integration.cachedEntities} cached entities · Updated {formatDate(integration.updatedAt)}
+                      </div>
+                    </div>
+                    <Badge variant={integration.connected ? "default" : "outline"}>
+                      {integration.connected ? "Connected" : "Disconnected"}
+                    </Badge>
+                  </div>
+                ))
+              ) : (
+                <div className="px-3 py-2.5 text-sm text-muted-foreground">
+                  No integrations connected yet.
+                </div>
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-4"
+              onClick={() => {
+                window.location.assign("/integrations")
+              }}
+            >
+              Manage integrations
+            </Button>
+          </SettingsPanel>
+
+          <SettingsPanel
+            icon={Shield01Icon}
+            title="Active sessions"
+            description="Review where your account is signed in and revoke sessions you no longer recognize."
+          >
+            <div className="divide-y rounded-md border">
+              {overview.sessions.map((item) => (
+                <div key={item.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">
+                      {formatUserAgent(item.userAgent)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {item.ipAddress ?? "Unknown IP"} · Last active {formatDate(item.updatedAt)}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {item.current ? <Badge>Current</Badge> : null}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => revokeSession(item.id, item.current)}
+                    >
+                      <HugeiconsIcon icon={Logout01Icon} strokeWidth={2} className="size-3.5" />
+                      Revoke
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SettingsPanel>
+
+          <SettingsPanel
+            icon={Delete02Icon}
+            title="Delete account"
+            description="Permanently remove your user, sessions, settings, Corsair accounts, cached entities, approvals, and agent history."
+            danger
+          >
+            <div className="grid gap-3">
+              <div className="text-sm text-muted-foreground">
+                Type <span className="font-mono text-foreground">{overview.user.email}</span> to confirm deletion.
+              </div>
+              <Input
+                value={deleteConfirm}
+                onChange={(event) => setDeleteConfirm(event.target.value)}
+                placeholder={overview.user.email}
+              />
+              <div>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="gap-2"
+                  disabled={!canDelete || deleting}
+                  onClick={deleteAccount}
+                >
+                  <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-4" />
+                  {deleting ? "Deleting…" : "Delete account"}
+                </Button>
+              </div>
+            </div>
+          </SettingsPanel>
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">Account details could not be loaded.</p>
+      )}
     </div>
   )
+}
+
+function SettingsPanel({
+  icon,
+  title,
+  description,
+  danger,
+  children,
+}: {
+  icon: typeof UserCircle02Icon
+  title: string
+  description: string
+  danger?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <section
+      className={cn(
+        "rounded-md border p-4",
+        danger && "border-destructive/40 bg-destructive/5"
+      )}
+    >
+      <div className="mb-4 flex items-start gap-3">
+        <div
+          className={cn(
+            "flex size-8 shrink-0 items-center justify-center rounded-md border bg-background",
+            danger && "border-destructive/30 text-destructive"
+          )}
+        >
+          <HugeiconsIcon icon={icon} strokeWidth={2} className="size-4" />
+        </div>
+        <div>
+          <h3 className="text-sm font-semibold">{title}</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
+        </div>
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function AccountMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border px-3 py-2">
+      <div className="text-lg font-semibold">{value}</div>
+      <div className="text-xs text-muted-foreground">{label}</div>
+    </div>
+  )
+}
+
+async function getAccountError(response: Response, fallback: string) {
+  const payload = (await response.json().catch(() => null)) as {
+    error?: string
+  } | null
+
+  return payload?.error ?? fallback
+}
+
+function getInitials(value: string) {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("")
+}
+
+function formatDate(value: string) {
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return "Unknown"
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date)
+}
+
+function formatProviderName(provider: string) {
+  if (provider === "google") return "Google"
+  if (provider === "github") return "GitHub"
+  if (provider === "credential" || provider === "email-password") return "Email and password"
+  return provider
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ")
+}
+
+function formatIntegrationName(plugin: string) {
+  if (plugin === "gmail") return "Gmail"
+  if (plugin === "googlecalendar") return "Google Calendar"
+  return formatProviderName(plugin)
+}
+
+function formatUserAgent(value: string | null) {
+  if (!value) return "Unknown device"
+  if (value.includes("Chrome")) return "Chrome browser"
+  if (value.includes("Firefox")) return "Firefox browser"
+  if (value.includes("Safari")) return "Safari browser"
+  return value.slice(0, 72)
 }
