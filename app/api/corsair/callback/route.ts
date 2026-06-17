@@ -1,5 +1,5 @@
 import { processOAuthCallback } from "corsair/oauth"
-import { NextResponse, type NextRequest } from "next/server"
+import { after, NextResponse, type NextRequest } from "next/server"
 
 import {
   ensureCorsairSetup,
@@ -7,8 +7,7 @@ import {
   getCorsairRedirectUri,
   isKnownCorsairPlugin,
 } from "@/lib/corsair/server"
-import { isSyncableCorsairPlugin } from "@/lib/corsair/sync"
-import { enqueueCorsairSync } from "@/inngest/events"
+import { isSyncableCorsairPlugin, syncCorsairPlugin } from "@/lib/corsair/sync"
 
 export async function GET(request: NextRequest) {
   const error = request.nextUrl.searchParams.get("error")
@@ -35,19 +34,20 @@ export async function GET(request: NextRequest) {
       redirectUri: getCorsairRedirectUri(),
     })
 
-    await ensureCorsairSetup(result.tenantId)
+    await ensureCorsairSetup(result.tenantId, true)
 
     if (isKnownCorsairPlugin(result.plugin) && isSyncableCorsairPlugin(result.plugin)) {
-      await enqueueCorsairSync({
-        tenantId: result.tenantId,
-        plugin: result.plugin,
-        reason: "oauth_callback",
-      })
+      after(() => syncCorsairPlugin(result.tenantId, result.plugin, "oauth_callback"))
     }
 
-    return NextResponse.redirect(
-      new URL(`/integrations?connected=${result.plugin}`, request.url)
-    )
+    const dest =
+      result.plugin === "gmail"
+        ? "/mail?connected=1"
+        : result.plugin === "googlecalendar"
+        ? "/calendar?connected=1"
+        : `/integrations?connected=${result.plugin}`
+
+    return NextResponse.redirect(new URL(dest, request.url))
   } catch (callbackError) {
     const message = encodeURIComponent(
       callbackError instanceof Error

@@ -4,7 +4,6 @@ import { ensureCorsairSetup } from "@/lib/corsair/server"
 import {
   gmailMailboxes,
   syncGmailMailbox,
-  listConnectedSyncTargets,
   syncCorsairPlugin,
   type GmailMailbox,
   type SyncableCorsairPluginId,
@@ -68,35 +67,7 @@ export const syncGoogleCalendarCache = inngest.createFunction(
   }
 )
 
-export const refreshConnectedWorkspaceCaches = inngest.createFunction(
-  {
-    id: "refresh-connected-workspace-caches",
-    triggers: { cron: "*/15 * * * *" },
-  },
-  async ({ step }) => {
-    const targets = await step.run("list-connected-sync-targets", () =>
-      listConnectedSyncTargets()
-    )
-    const results = []
-
-    for (const target of targets) {
-      const result = await step.run(
-        `sync-${target.plugin}-${target.tenantId}`,
-        () => runPluginSync(target.tenantId, target.plugin, "scheduled")
-      )
-
-      results.push(result)
-    }
-
-    return {
-      syncedTargets: results.length,
-      results,
-    }
-  }
-)
-
 export const functions = [
   syncGmailCache,
   syncGoogleCalendarCache,
-  refreshConnectedWorkspaceCaches,
 ]
