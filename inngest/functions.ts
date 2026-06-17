@@ -2,8 +2,11 @@ import { inngest } from "@/inngest/client"
 import { corsairSyncEvents } from "@/inngest/events"
 import { ensureCorsairSetup } from "@/lib/corsair/server"
 import {
+  gmailMailboxes,
+  syncGmailMailbox,
   listConnectedSyncTargets,
   syncCorsairPlugin,
+  type GmailMailbox,
   type SyncableCorsairPluginId,
 } from "@/lib/corsair/sync"
 
@@ -11,14 +14,16 @@ type SyncEventData = {
   tenantId?: string
   plugin?: SyncableCorsairPluginId
   reason?: string
+  mailbox?: GmailMailbox
 }
 
 async function runPluginSync(
   tenantId: string,
-  plugin: SyncableCorsairPluginId
+  plugin: SyncableCorsairPluginId,
+  reason?: string | null
 ) {
   await ensureCorsairSetup(tenantId)
-  return syncCorsairPlugin(tenantId, plugin)
+  return syncCorsairPlugin(tenantId, plugin, reason)
 }
 
 export const syncGmailCache = inngest.createFunction(
@@ -27,13 +32,21 @@ export const syncGmailCache = inngest.createFunction(
     triggers: { event: corsairSyncEvents.gmail },
   },
   async ({ event, step }) => {
-    const { tenantId } = event.data as SyncEventData
+    const { tenantId, mailbox, reason } = event.data as SyncEventData
 
     if (!tenantId) {
       throw new Error("Missing tenantId for Gmail sync.")
     }
 
-    return step.run("sync-gmail-cache", () => runPluginSync(tenantId, "gmail"))
+    if (mailbox && gmailMailboxes.includes(mailbox)) {
+      return step.run(`sync-gmail-${mailbox}-cache`, () =>
+        syncGmailMailbox(tenantId, mailbox, reason)
+      )
+    }
+
+    return step.run("sync-gmail-cache", () =>
+      runPluginSync(tenantId, "gmail", reason)
+    )
   }
 )
 
@@ -43,14 +56,14 @@ export const syncGoogleCalendarCache = inngest.createFunction(
     triggers: { event: corsairSyncEvents.googlecalendar },
   },
   async ({ event, step }) => {
-    const { tenantId } = event.data as SyncEventData
+    const { tenantId, reason } = event.data as SyncEventData
 
     if (!tenantId) {
       throw new Error("Missing tenantId for Google Calendar sync.")
     }
 
     return step.run("sync-google-calendar-cache", () =>
-      runPluginSync(tenantId, "googlecalendar")
+      runPluginSync(tenantId, "googlecalendar", reason)
     )
   }
 )
@@ -69,7 +82,7 @@ export const refreshConnectedWorkspaceCaches = inngest.createFunction(
     for (const target of targets) {
       const result = await step.run(
         `sync-${target.plugin}-${target.tenantId}`,
-        () => runPluginSync(target.tenantId, target.plugin)
+        () => runPluginSync(target.tenantId, target.plugin, "scheduled")
       )
 
       results.push(result)

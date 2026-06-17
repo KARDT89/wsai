@@ -26,6 +26,16 @@ export type MailThread = {
   messages: MailMessage[]
 }
 
+export type CacheMetadata = {
+  lastSyncedAt: string | null
+  lastStartedAt?: string | null
+  lastFailedAt?: string | null
+  lastError?: string | null
+  status?: "idle" | "running" | "success" | "failed"
+  reason?: string | null
+  itemCount: number
+}
+
 export type CalendarEvent = {
   id: string
   corsairId: string

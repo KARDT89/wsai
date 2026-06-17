@@ -1,7 +1,13 @@
 import { executePermission } from "corsair"
 import { NextResponse } from "next/server"
 
+import { enqueueCorsairSync } from "@/inngest/events"
 import { getCorsairInstance } from "@/lib/corsair/server"
+import {
+  isSyncableCorsairPlugin,
+  type GmailMailbox,
+  type SyncableCorsairPluginId,
+} from "@/lib/corsair/sync"
 import { prisma } from "@/lib/db"
 import { getCurrentSession } from "@/lib/session"
 
@@ -17,56 +23,7 @@ type CorsairPermissionRow = {
   status: string
   created_at: Date
   updated_at: Date
-}
-
-/**
- * Execute an approved operation via the appropriate internal API route.
- * Each plugin+operation maps to a known internal endpoint.
- */
-async function executeApproved(
-  userId: string,
-  plugin: string,
-  operation: string,
-  input: Record<string, unknown>,
-  origin: string
-): Promise<{ ok: boolean; error?: string }> {
-  const baseUrl = origin
-
-  try {
-    if (plugin === "gmail" && operation === "messages.send") {
-      const res = await fetch(`${baseUrl}/api/mail/send`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-approval-exec": "1" },
-        body: JSON.stringify(input),
-      })
-      if (!res.ok) {
-        const err = (await res.json()) as { error?: string }
-        return { ok: false, error: err.error ?? "Send failed" }
-      }
-      return { ok: true }
-    }
-
-    if (plugin === "gmail" && (operation === "threads.delete" || operation === "threads.trash")) {
-      const res = await fetch(`${baseUrl}/api/mail/action`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-approval-exec": "1" },
-        body: JSON.stringify({ action: "trash", threadId: input.id ?? input.threadId }),
-      })
-      if (!res.ok) {
-        const err = (await res.json()) as { error?: string }
-        return { ok: false, error: err.error ?? "Action failed" }
-      }
-      return { ok: true }
-    }
-
-    // For calendar operations and others — log as approved but don't auto-execute yet.
-    // These will be executed by the agent on the next invocation.
-    // TODO: add calendar event execution once /api/calendar/events supports POST
-    console.log(`[approvals] approved ${plugin}/${operation} for user ${userId}`, input)
-    return { ok: true }
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Execution failed" }
-  }
+  error?: string | null
 }
 
 export async function PATCH(req: Request, { params }: Params) {
@@ -86,47 +43,10 @@ export async function PATCH(req: Request, { params }: Params) {
     return handleCorsairPermission(id.slice("corsair:".length), session.user.id, body.action)
   }
 
-  const existing = await prisma.approvalRequest.findUnique({
-    where: { id, userId: session.user.id },
-  })
-
-  if (!existing) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 })
-  }
-
-  if (existing.status !== "pending") {
-    return NextResponse.json({ error: "Already decided" }, { status: 409 })
-  }
-
-  if (body.action === "reject") {
-    const updated = await prisma.approvalRequest.update({
-      where: { id },
-      data: { status: "rejected", decidedAt: new Date() },
-    })
-    return NextResponse.json({ approval: updated })
-  }
-
-  // Approve: try to execute, then update status
-  const origin = new URL(req.url).origin
-  const result = await executeApproved(
-    session.user.id,
-    existing.plugin,
-    existing.operation,
-    existing.inputJson as Record<string, unknown>,
-    origin
+  return NextResponse.json(
+    { error: "Only Corsair permission approvals are supported." },
+    { status: 404 }
   )
-
-  const newStatus = result.ok ? "approved" : "failed"
-  const updated = await prisma.approvalRequest.update({
-    where: { id },
-    data: { status: newStatus, decidedAt: new Date() },
-  })
-
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error, approval: updated }, { status: 500 })
-  }
-
-  return NextResponse.json({ approval: updated })
 }
 
 export async function DELETE(_req: Request, { params }: Params) {
@@ -146,11 +66,10 @@ export async function DELETE(_req: Request, { params }: Params) {
     return NextResponse.json({ ok: true })
   }
 
-  await prisma.approvalRequest.deleteMany({
-    where: { id, userId: session.user.id },
-  })
-
-  return NextResponse.json({ ok: true })
+  return NextResponse.json(
+    { error: "Only Corsair permission approvals are supported." },
+    { status: 404 }
+  )
 }
 
 async function handleCorsairPermission(
@@ -197,9 +116,30 @@ async function handleCorsairPermission(
       AND tenant_id = ${tenantId}
   `
 
-  const result = await executePermission(getCorsairInstance(), permission.token)
+  let result: Awaited<ReturnType<typeof executePermission>>
+  try {
+    result = await executePermission(getCorsairInstance(), permission.token)
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : "Execution threw unexpectedly"
+    await prisma.$executeRaw`
+      UPDATE corsair_permissions
+      SET status = 'failed',
+          error = ${errMsg},
+          updated_at = NOW()
+      WHERE id = ${id}
+        AND tenant_id = ${tenantId}
+    `
+    return NextResponse.json(
+      { error: errMsg, approval: mapCorsairPermission(permission, "failed") },
+      { status: 500 }
+    )
+  }
   const ok = !result.error
   const finalStatus = ok ? "completed" : "failed"
+
+  if (ok) {
+    await enqueueApprovalSync(tenantId, permission.plugin, permission.endpoint)
+  }
 
   await prisma.$executeRaw`
     UPDATE corsair_permissions
@@ -210,13 +150,19 @@ async function handleCorsairPermission(
       AND tenant_id = ${tenantId}
   `
 
-  return NextResponse.json(
-    {
-      approval: mapCorsairPermission(permission, finalStatus),
-      result,
-    },
-    { status: ok ? 200 : 500 }
-  )
+  if (!ok) {
+    return NextResponse.json(
+      {
+        error: result.error ?? "Execution failed",
+        approval: mapCorsairPermission(permission, finalStatus),
+      },
+      { status: 500 }
+    )
+  }
+
+  return NextResponse.json({
+    approval: mapCorsairPermission(permission, finalStatus),
+  })
 }
 
 function mapCorsairPermission(
@@ -227,8 +173,9 @@ function mapCorsairPermission(
     id: `corsair:${permission.id}`,
     plugin: permission.plugin,
     operation: permission.endpoint,
-    description: `${permission.plugin} wants to run ${permission.endpoint}`,
+    description: describePermission(permission.plugin, permission.endpoint, parseJsonRecord(permission.args)),
     inputJson: parseJsonRecord(permission.args),
+    error: permission.error ?? null,
     status:
       status === "denied"
         ? "rejected"
@@ -240,6 +187,90 @@ function mapCorsairPermission(
     decidedAt: status === "pending" ? null : new Date().toISOString(),
     createdAt: new Date(permission.created_at).toISOString(),
   }
+}
+
+async function enqueueApprovalSync(
+  tenantId: string,
+  plugin: string,
+  operation: string
+) {
+  if (!isSyncableCorsairPlugin(plugin)) return
+
+  const mailboxes = getGmailSyncMailboxes(plugin, operation)
+  if (mailboxes.length > 0) {
+    await Promise.all(
+      mailboxes.map((mailbox) =>
+        enqueueCorsairSync({
+          tenantId,
+          plugin: "gmail",
+          reason: "agent_action",
+          mailbox,
+        })
+      )
+    )
+    return
+  }
+
+  await enqueueCorsairSync({
+    tenantId,
+    plugin: plugin as SyncableCorsairPluginId,
+    reason: "agent_action",
+  })
+}
+
+function getGmailSyncMailboxes(plugin: string, operation: string): GmailMailbox[] {
+  if (plugin !== "gmail") return []
+  if (operation === "messages.send" || operation === "drafts.send") return ["sent"]
+  if (operation.startsWith("drafts.")) return ["drafts"]
+  if (operation.endsWith(".trash")) return ["inbox", "trash"]
+  if (operation.endsWith(".untrash")) return ["trash", "inbox"]
+  if (operation.endsWith(".modify") || operation.endsWith(".batchModify")) {
+    return ["inbox", "starred"]
+  }
+  return []
+}
+
+function describePermission(
+  plugin: string,
+  operation: string,
+  input: Record<string, unknown>
+) {
+  const event = asRecord(input.event)
+  const summary = getString(event, "summary")
+
+  if (plugin === "gmail") {
+    if (operation === "messages.send") return "Send a Gmail message"
+    if (operation === "drafts.create") return "Save a Gmail draft"
+    if (operation === "drafts.send") return "Send a Gmail draft"
+    if (operation.includes(".trash")) return "Move a Gmail item to trash"
+    if (operation.includes(".delete")) return "Permanently delete a Gmail item"
+    if (operation.includes(".modify")) return "Update Gmail labels or read state"
+    return `Gmail wants to run ${operation}`
+  }
+
+  if (plugin === "googlecalendar") {
+    if (operation === "events.create") {
+      return summary ? `Create calendar event: ${summary}` : "Create a calendar event"
+    }
+    if (operation === "events.update") {
+      return summary ? `Update calendar event: ${summary}` : "Update a calendar event"
+    }
+    if (operation === "events.delete") return "Delete a calendar event"
+    return `Google Calendar wants to run ${operation}`
+  }
+
+  return `${plugin} wants to run ${operation}`
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function getString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key]
+  return typeof value === "string" && value.trim() ? value : null
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> {

@@ -24,6 +24,7 @@ model User {
   accounts        Account[]
   corsairAccounts CorsairAccount[]
   corsairPermissions CorsairPermission[]
+  syncStatuses   SyncStatus[]
   agentSessions    AgentSession[]
   settings         UserSettings?
   approvalRequests ApprovalRequest[]
@@ -157,6 +158,30 @@ model CorsairPermission {
   @@index([status])
   @@index([token])
   @@map("corsair_permissions")
+}
+
+model SyncStatus {
+  id            String    @id @default(cuid())
+  tenantId      String    @map("tenant_id")
+  plugin        String
+  scope         String    @default("all")
+  status        String    @default("idle")
+  reason        String?
+  lastStartedAt DateTime? @map("last_started_at") @db.Timestamptz
+  lastSyncedAt  DateTime? @map("last_synced_at") @db.Timestamptz
+  lastFailedAt  DateTime? @map("last_failed_at") @db.Timestamptz
+  lastError     String?   @map("last_error")
+  itemCount     Int       @default(0) @map("item_count")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  tenant User @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, plugin, scope])
+  @@index([tenantId])
+  @@index([plugin])
+  @@index([status])
+  @@map("sync_status")
 }
 
 // settings

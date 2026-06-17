@@ -22,6 +22,7 @@ type Approval = {
   description: string
   inputJson: Record<string, unknown>
   status: "pending" | "approved" | "rejected" | "failed"
+  error?: string | null
   decidedAt: string | null
   createdAt: string
 }
@@ -58,6 +59,16 @@ export default function ApprovalsPage() {
     return () => window.clearTimeout(timeout)
   }, [load])
 
+  React.useEffect(() => {
+    if (pendingCount === 0) return
+
+    const interval = window.setInterval(() => {
+      void load()
+    }, 5_000)
+
+    return () => window.clearInterval(interval)
+  }, [load, pendingCount])
+
   async function decide(id: string, action: "approve" | "reject") {
     setActing(id)
     try {
@@ -70,7 +81,11 @@ export default function ApprovalsPage() {
       if (!res.ok) {
         throw new Error(data.error ?? "Failed")
       }
-      toast.success(action === "approve" ? "Action approved and executed" : "Action rejected")
+      toast.success(
+        action === "approve"
+          ? "Action approved. Refreshing the related cache."
+          : "Action rejected"
+      )
       setApprovals((prev) =>
         prev.map((a) =>
           a.id === id
@@ -265,6 +280,12 @@ function ApprovalCard({
               {JSON.stringify(approval.inputJson, null, 2)}
             </pre>
           )}
+
+          {approval.status === "failed" && approval.error ? (
+            <p className="mt-2 rounded-md bg-background/70 px-3 py-2 text-xs text-red-700 ring-1 ring-red-200 dark:text-red-300 dark:ring-red-900/60">
+              {approval.error}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center gap-1">

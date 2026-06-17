@@ -62,7 +62,7 @@ export interface WSAIModule {
 
   /**
    * Write operations that require user approval before execution.
-   * The agent will create an ApprovalRequest instead of running these directly.
+   * Corsair creates permission rows for gated agent operations.
    */
   approvalRequired: ApprovalOperation[]
 

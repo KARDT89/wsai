@@ -25,7 +25,7 @@ export async function POST(
 
   try {
     await ensureCorsairSetup(session.user.id)
-    const result = await syncCorsairPlugin(session.user.id, plugin)
+    const result = await syncCorsairPlugin(session.user.id, plugin, "manual")
 
     return NextResponse.json(result)
   } catch (error) {

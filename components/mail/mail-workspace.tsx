@@ -13,7 +13,6 @@ import {
   Mail01Icon,
   MailOpenIcon,
   MailSend01Icon,
-  RefreshIcon,
   SearchingIcon,
   SpamIcon,
   StarIcon,
@@ -36,7 +35,7 @@ import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { useAiContext } from "@/lib/ai-context"
-import type { MailMessage, MailThread } from "@/lib/workspace-types"
+import type { CacheMetadata, MailMessage, MailThread } from "@/lib/workspace-types"
 
 type Mailbox = "inbox" | "starred" | "snoozed" | "sent" | "drafts" | "trash"
 
@@ -57,6 +56,11 @@ type ComposeState = {
   subject: string
   body: string
   threadId?: string
+}
+
+type MailThreadsResponse = {
+  threads: MailThread[]
+  cache?: CacheMetadata
 }
 
 const mailboxItems: Array<{
@@ -86,11 +90,14 @@ export function MailWorkspace() {
     queryKey: ["mail", "threads", selectedMailbox],
     queryFn: () => fetchMailThreads(selectedMailbox),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   })
 
-  const threads = React.useMemo(() => threadsQuery.data ?? [], [threadsQuery.data])
+  const threads = React.useMemo(
+    () => threadsQuery.data?.threads ?? [],
+    [threadsQuery.data]
+  )
 
   const filteredThreads = React.useMemo(() => {
     if (!searchQuery.trim()) return threads
@@ -141,12 +148,17 @@ export function MailWorkspace() {
     mutationFn: runMailAction,
     onMutate: async (variables) => {
       await queryClient.cancelQueries({ queryKey: ["mail", "threads", selectedMailbox] })
-      const previous = queryClient.getQueryData<MailThread[]>(["mail", "threads", selectedMailbox])
+      const previous = queryClient.getQueryData<MailThreadsResponse>([
+        "mail",
+        "threads",
+        selectedMailbox,
+      ])
 
-      queryClient.setQueryData<MailThread[]>(
+      queryClient.setQueryData<MailThreadsResponse>(
         ["mail", "threads", selectedMailbox],
         (old) => {
           if (!old) return old
+          const oldThreads = old.threads
 
           if (
             variables.action === "archive" ||
@@ -154,35 +166,52 @@ export function MailWorkspace() {
             variables.action === "untrash" ||
             variables.action === "spam"
           ) {
-            return old.filter((t) => t.corsairId !== variables.threadId)
+            return {
+              ...old,
+              threads: oldThreads.filter((t) => t.corsairId !== variables.threadId),
+            }
           }
 
           if (variables.action === "star") {
-            return selectedMailbox === "starred"
-              ? old
-              : old.map((t) =>
-                  t.corsairId === variables.threadId ? { ...t, starred: true } : t
-                )
+            return {
+              ...old,
+              threads:
+                selectedMailbox === "starred"
+                  ? oldThreads
+                  : oldThreads.map((t) =>
+                      t.corsairId === variables.threadId ? { ...t, starred: true } : t
+                    ),
+            }
           }
 
           if (variables.action === "unstar") {
-            return selectedMailbox === "starred"
-              ? old.filter((t) => t.corsairId !== variables.threadId)
-              : old.map((t) =>
-                  t.corsairId === variables.threadId ? { ...t, starred: false } : t
-                )
+            return {
+              ...old,
+              threads:
+                selectedMailbox === "starred"
+                  ? oldThreads.filter((t) => t.corsairId !== variables.threadId)
+                  : oldThreads.map((t) =>
+                      t.corsairId === variables.threadId ? { ...t, starred: false } : t
+                    ),
+            }
           }
 
           if (variables.action === "markRead") {
-            return old.map((t) =>
-              t.corsairId === variables.threadId ? { ...t, unread: false } : t
-            )
+            return {
+              ...old,
+              threads: oldThreads.map((t) =>
+                t.corsairId === variables.threadId ? { ...t, unread: false } : t
+              ),
+            }
           }
 
           if (variables.action === "markUnread") {
-            return old.map((t) =>
-              t.corsairId === variables.threadId ? { ...t, unread: true } : t
-            )
+            return {
+              ...old,
+              threads: oldThreads.map((t) =>
+                t.corsairId === variables.threadId ? { ...t, unread: true } : t
+              ),
+            }
           }
 
           return old
@@ -203,27 +232,10 @@ export function MailWorkspace() {
     },
   })
 
-  const mailboxSyncMutation = useMutation({
-    mutationFn: syncMailbox,
-    onSuccess: (_data, mailbox) => {
-      void queryClient.invalidateQueries({
-        queryKey: ["mail", "threads", mailbox],
-      })
-    },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Unable to sync mailbox")
-    },
-  })
-
-  const syncSelectedMailbox = mailboxSyncMutation.mutate
-  const syncedMailboxesRef = React.useRef<Set<Mailbox>>(new Set())
-
-  React.useEffect(() => {
-    if (!syncedMailboxesRef.current.has(selectedMailbox)) {
-      syncedMailboxesRef.current.add(selectedMailbox)
-      syncSelectedMailbox(selectedMailbox)
-    }
-  }, [selectedMailbox, syncSelectedMailbox])
+  const cacheLabel = React.useMemo(
+    () => formatCacheStatus(threadsQuery.data?.cache),
+    [threadsQuery.data?.cache]
+  )
 
   // Auto-mark thread as read when opened
   React.useEffect(() => {
@@ -459,22 +471,8 @@ export function MailWorkspace() {
             />
           </div>
           <Badge variant="outline" className="shrink-0 font-mono text-[10px]">
-            {mailboxSyncMutation.isPending ? "syncing" : "cached"}
+            {cacheLabel}
           </Badge>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={mailboxSyncMutation.isPending}
-            onClick={() => mailboxSyncMutation.mutate(selectedMailbox)}
-          >
-            <HugeiconsIcon
-              icon={RefreshIcon}
-              strokeWidth={2}
-              className={cn("size-4", mailboxSyncMutation.isPending && "animate-spin")}
-            />
-            <span className="sr-only">Refresh mailbox</span>
-          </Button>
         </div>
 
         <div className="flex h-8 items-center border-b px-3">
@@ -870,24 +868,17 @@ export function MailWorkspace() {
   )
 }
 
-async function fetchMailThreads(mailbox: Mailbox): Promise<MailThread[]> {
+async function fetchMailThreads(mailbox: Mailbox): Promise<MailThreadsResponse> {
   const response = await fetch(`/api/mail/threads?mailbox=${mailbox}`)
 
   if (!response.ok) {
     throw new Error("Unable to fetch mail threads")
   }
 
-  const payload = (await response.json()) as { threads?: MailThread[] }
-  return payload.threads ?? []
-}
-
-async function syncMailbox(mailbox: Mailbox) {
-  const response = await fetch(`/api/mail/sync?mailbox=${mailbox}`, {
-    method: "POST",
-  })
-
-  if (!response.ok) {
-    throw new Error(await getErrorMessage(response, "Unable to sync mailbox"))
+  const payload = (await response.json()) as MailThreadsResponse
+  return {
+    threads: payload.threads ?? [],
+    cache: payload.cache,
   }
 }
 
@@ -986,6 +977,32 @@ async function getErrorMessage(response: Response, fallback: string) {
   } | null
 
   return payload?.error ?? fallback
+}
+
+function formatCacheStatus(cache?: CacheMetadata) {
+  if (cache?.status === "running") return "Refreshing..."
+  if (cache?.status === "failed") return "Sync issue"
+  return formatCacheFreshness(cache?.lastSyncedAt)
+}
+
+function formatCacheFreshness(value?: string | null) {
+  if (!value) return "Not synced"
+
+  const syncedAt = new Date(value).getTime()
+  if (!Number.isFinite(syncedAt)) return "Cached"
+
+  const seconds = Math.max(0, Math.floor((Date.now() - syncedAt) / 1000))
+  if (seconds < 15) return "Synced just now"
+  if (seconds < 60) return `Synced ${seconds}s ago`
+
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `Synced ${minutes}m ago`
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `Synced ${hours}h ago`
+
+  const days = Math.floor(hours / 24)
+  return `Synced ${days}d ago`
 }
 
 const emptyCompose: ComposeState = {

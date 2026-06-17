@@ -2,6 +2,11 @@ import { addDays, subDays } from "date-fns"
 
 import { getCorsairInstance, type CorsairPluginId } from "@/lib/corsair/server"
 import { prisma } from "@/lib/db"
+import {
+  markSyncFailed,
+  markSyncStarted,
+  markSyncSucceeded,
+} from "@/lib/sync-status"
 
 type SyncResult = {
   plugin: CorsairPluginId
@@ -30,10 +35,39 @@ export type CorsairSyncTarget = {
 
 export async function syncCorsairPlugin(
   tenantId: string,
-  plugin: CorsairPluginId
+  plugin: CorsairPluginId,
+  reason?: string | null
+): Promise<SyncResult> {
+  if (isSyncableCorsairPlugin(plugin)) {
+    await markSyncStarted({ tenantId, plugin, reason })
+  }
+
+  try {
+    const result = await syncCorsairPluginUnsafe(tenantId, plugin, reason)
+    if (isSyncableCorsairPlugin(plugin)) {
+      await markSyncSucceeded({
+        tenantId,
+        plugin,
+        reason,
+        itemCount: result.synced,
+      })
+    }
+    return result
+  } catch (error) {
+    if (isSyncableCorsairPlugin(plugin)) {
+      await markSyncFailed({ tenantId, plugin, reason, error })
+    }
+    throw error
+  }
+}
+
+async function syncCorsairPluginUnsafe(
+  tenantId: string,
+  plugin: CorsairPluginId,
+  reason?: string | null
 ): Promise<SyncResult> {
   if (plugin === "gmail") {
-    return syncGmail(tenantId)
+    return syncGmail(tenantId, reason)
   }
 
   if (plugin === "googlecalendar") {
@@ -88,14 +122,17 @@ export async function listConnectedSyncTargets(): Promise<CorsairSyncTarget[]> {
   return Array.from(uniqueTargets.values())
 }
 
-export async function syncPrimaryCorsairPlugins(tenantId: string) {
+export async function syncPrimaryCorsairPlugins(
+  tenantId: string,
+  reason: string | null = "scheduled"
+) {
   return Promise.all([
-    syncCorsairPlugin(tenantId, "gmail").catch((error) => ({
+    syncCorsairPlugin(tenantId, "gmail", reason).catch((error) => ({
       plugin: "gmail" as const,
       synced: 0,
       error: error instanceof Error ? error.message : "Unknown Gmail sync error",
     })),
-    syncCorsairPlugin(tenantId, "googlecalendar").catch((error) => ({
+    syncCorsairPlugin(tenantId, "googlecalendar", reason).catch((error) => ({
       plugin: "googlecalendar" as const,
       synced: 0,
       error:
@@ -104,9 +141,12 @@ export async function syncPrimaryCorsairPlugins(tenantId: string) {
   ])
 }
 
-async function syncGmail(tenantId: string): Promise<SyncResult> {
+async function syncGmail(
+  tenantId: string,
+  reason?: string | null
+): Promise<SyncResult> {
   const results = await Promise.allSettled(
-    gmailMailboxes.map((mailbox) => syncGmailMailbox(tenantId, mailbox))
+    gmailMailboxes.map((mailbox) => syncGmailMailbox(tenantId, mailbox, reason))
   )
 
   const synced = results.reduce((total, result) => {
@@ -119,7 +159,36 @@ async function syncGmail(tenantId: string): Promise<SyncResult> {
   }
 }
 
-export async function syncGmailMailbox(tenantId: string, mailbox: GmailMailbox) {
+export async function syncGmailMailbox(
+  tenantId: string,
+  mailbox: GmailMailbox,
+  reason?: string | null
+) {
+  await markSyncStarted({ tenantId, plugin: "gmail", scope: mailbox, reason })
+
+  try {
+    const result = await syncGmailMailboxUnsafe(tenantId, mailbox)
+    await markSyncSucceeded({
+      tenantId,
+      plugin: "gmail",
+      scope: mailbox,
+      reason,
+      itemCount: result.synced,
+    })
+    return result
+  } catch (error) {
+    await markSyncFailed({
+      tenantId,
+      plugin: "gmail",
+      scope: mailbox,
+      reason,
+      error,
+    })
+    throw error
+  }
+}
+
+async function syncGmailMailboxUnsafe(tenantId: string, mailbox: GmailMailbox) {
   const corsair = getCorsairInstance().withTenant(tenantId)
   const gmailApi = corsair.gmail.api
 

@@ -53,7 +53,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
-import type { CalendarEvent } from "@/lib/workspace-types"
+import type { CacheMetadata, CalendarEvent } from "@/lib/workspace-types"
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -64,6 +64,11 @@ const TOTAL_HEIGHT = (END_HOUR - START_HOUR) * HOUR_HEIGHT
 const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i)
 
 type ViewMode = "week" | "month" | "day"
+
+type CalendarEventsResponse = {
+  events: CalendarEvent[]
+  cache?: CacheMetadata
+}
 
 // ─── Event helpers ───────────────────────────────────────────────────────────
 
@@ -108,18 +113,42 @@ function localDatetimeToISO(value: string): string {
   return new Date(value).toISOString()
 }
 
-// ─── API calls ───────────────────────────────────────────────────────────────
-
-async function fetchCalendarEvents(): Promise<CalendarEvent[]> {
-  const r = await fetch("/api/calendar/events")
-  if (!r.ok) throw new Error("Failed to load events")
-  const data = (await r.json()) as { events?: CalendarEvent[] }
-  return data.events ?? []
+function formatCacheStatus(cache?: CacheMetadata) {
+  if (cache?.status === "running") return "Refreshing..."
+  if (cache?.status === "failed") return "Sync issue"
+  return formatCacheFreshness(cache?.lastSyncedAt)
 }
 
-async function syncCalendar(): Promise<void> {
-  const r = await fetch("/api/calendar/sync", { method: "POST" })
-  if (!r.ok) throw new Error("Sync failed")
+function formatCacheFreshness(value?: string | null) {
+  if (!value) return "Not synced"
+
+  const syncedAt = new Date(value).getTime()
+  if (!Number.isFinite(syncedAt)) return "Cached"
+
+  const seconds = Math.max(0, Math.floor((Date.now() - syncedAt) / 1000))
+  if (seconds < 15) return "Synced just now"
+  if (seconds < 60) return `Synced ${seconds}s ago`
+
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `Synced ${minutes}m ago`
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `Synced ${hours}h ago`
+
+  const days = Math.floor(hours / 24)
+  return `Synced ${days}d ago`
+}
+
+// ─── API calls ───────────────────────────────────────────────────────────────
+
+async function fetchCalendarEvents(): Promise<CalendarEventsResponse> {
+  const r = await fetch("/api/calendar/events")
+  if (!r.ok) throw new Error("Failed to load events")
+  const data = (await r.json()) as CalendarEventsResponse
+  return {
+    events: data.events ?? [],
+    cache: data.cache,
+  }
 }
 
 async function calendarAction(payload: Record<string, unknown>): Promise<void> {
@@ -148,17 +177,16 @@ export function CalendarDashboard() {
     prefillStart?: string
   }>({ open: false, mode: "create" })
 
-  const eventsQuery = useQuery({ queryKey: ["calendar", "events"], queryFn: fetchCalendarEvents })
-  const events = eventsQuery.data ?? []
-
-  const syncMutation = useMutation({
-    mutationFn: syncCalendar,
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["calendar", "events"] })
-      toast.success("Calendar synced")
-    },
-    onError: (e: Error) => toast.error(e.message),
+  const eventsQuery = useQuery({
+    queryKey: ["calendar", "events"],
+    queryFn: fetchCalendarEvents,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   })
+  const events = eventsQuery.data?.events ?? []
+
+  const cacheLabel = formatCacheStatus(eventsQuery.data?.cache)
 
   const deleteMutation = useMutation({
     mutationFn: (eventId: string) => calendarAction({ action: "delete", eventId }),
@@ -242,19 +270,14 @@ export function CalendarDashboard() {
           New Event
         </Button>
 
-        <Button
-          variant="outline"
-          className="w-full justify-start gap-2"
-          onClick={() => syncMutation.mutate()}
-          disabled={syncMutation.isPending}
-        >
-          <HugeiconsIcon
-            icon={RefreshIcon}
-            strokeWidth={2}
-            className={cn("size-4", syncMutation.isPending && "animate-spin")}
-          />
-          {syncMutation.isPending ? "Syncing…" : "Sync Calendar"}
-        </Button>
+        <div>
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Cache
+          </p>
+          <Badge variant="outline" className="font-mono text-[10px]">
+            {cacheLabel}
+          </Badge>
+        </div>
 
         <Separator />
 

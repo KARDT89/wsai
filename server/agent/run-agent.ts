@@ -135,6 +135,13 @@ If an integration is not connected, tell the user to connect it at /integrations
 - Return only the fields needed from run_script; filter large API responses inside the script.
 - Do not repeat schemas or raw JSON to the user unless asked.
 
+## Empty result handling
+
+- If a Gmail or Calendar search/list operation returns no matching items, stop and say plainly that you could not find a matching item.
+- Do not broaden, retry, or chain more searches unless the user explicitly asks you to keep looking.
+- If the task depends on a missing item, do not create events, drafts, replies, labels, or approvals. Explain that no action was taken.
+- For requests like "most recent unread email from a real person", one focused unread inbox search is enough. If no suitable message is found, stop.
+
 ## Approval and safety
 
 ${buildApprovalInstructions(approvalStrict)}

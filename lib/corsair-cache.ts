@@ -1,6 +1,12 @@
 import { prisma } from "@/lib/db"
 import type { GmailMailbox } from "@/lib/corsair/sync"
-import type { CalendarEvent, MailMessage, MailThread } from "@/lib/workspace-types"
+import { getSyncStatus, type SyncStatusMetadata } from "@/lib/sync-status"
+import type {
+  CacheMetadata,
+  CalendarEvent,
+  MailMessage,
+  MailThread,
+} from "@/lib/workspace-types"
 
 type CachedEntity = {
   id: string
@@ -54,7 +60,34 @@ export async function getCachedMailThreads(
   tenantId: string,
   mailbox: GmailMailbox = "inbox"
 ): Promise<MailThread[]> {
-  const entities = await getEntitiesForIntegration(tenantId, "gmail")
+  return (await getCachedMailThreadsWithCache(tenantId, mailbox)).threads
+}
+
+export async function getCachedMailThreadsWithCache(
+  tenantId: string,
+  mailbox: GmailMailbox = "inbox"
+): Promise<{ threads: MailThread[]; cache: CacheMetadata }> {
+  const [entities, mailboxStatus, pluginStatus] = await Promise.all([
+    getEntitiesForIntegration(tenantId, "gmail"),
+    getSyncStatus(tenantId, "gmail", mailbox),
+    getSyncStatus(tenantId, "gmail"),
+  ])
+  const threads = mapCachedMailThreads(entities, mailbox)
+
+  return {
+    threads,
+    cache: getCacheMetadata(
+      entities,
+      threads.length,
+      mailboxStatus ?? pluginStatus
+    ),
+  }
+}
+
+function mapCachedMailThreads(
+  entities: CachedEntity[],
+  mailbox: GmailMailbox
+): MailThread[] {
   const draftEntities = entities.filter((entity) =>
     GMAIL_DRAFT_TYPES.has(normalizeType(entity.entityType))
   )
@@ -86,12 +119,21 @@ export async function getCachedMailThreads(
 export async function getCachedCalendarEvents(
   tenantId: string
 ): Promise<CalendarEvent[]> {
-  const entities = await getEntitiesForIntegration(tenantId, "googlecalendar")
+  return (await getCachedCalendarEventsWithCache(tenantId)).events
+}
+
+export async function getCachedCalendarEventsWithCache(
+  tenantId: string
+): Promise<{ events: CalendarEvent[]; cache: CacheMetadata }> {
+  const [entities, syncStatus] = await Promise.all([
+    getEntitiesForIntegration(tenantId, "googlecalendar"),
+    getSyncStatus(tenantId, "googlecalendar"),
+  ])
   const todayStart = new Date()
   todayStart.setHours(0, 0, 0, 0)
   const todayMs = todayStart.getTime()
 
-  return entities
+  const events = entities
     .filter((entity) => CALENDAR_EVENT_TYPES.has(normalizeType(entity.entityType)))
     .map(mapCalendarEntity)
     .filter((event) => {
@@ -103,6 +145,32 @@ export async function getCachedCalendarEvents(
       const right = b.startsAt ? new Date(b.startsAt).getTime() : 0
       return left - right
     })
+
+  return {
+    events,
+    cache: getCacheMetadata(entities, events.length, syncStatus),
+  }
+}
+
+function getCacheMetadata(
+  entities: CachedEntity[],
+  itemCount: number,
+  syncStatus?: SyncStatusMetadata | null
+): CacheMetadata {
+  const lastEntityUpdatedAt = entities.reduce<string | null>((latest, entity) => {
+    const value = entity.updatedAt.toISOString()
+    return latest && latest > value ? latest : value
+  }, null)
+
+  return {
+    lastSyncedAt: syncStatus?.lastSyncedAt ?? lastEntityUpdatedAt,
+    lastStartedAt: syncStatus?.lastStartedAt ?? null,
+    lastFailedAt: syncStatus?.lastFailedAt ?? null,
+    lastError: syncStatus?.lastError ?? null,
+    status: syncStatus?.status ?? "idle",
+    reason: syncStatus?.reason ?? null,
+    itemCount: syncStatus?.itemCount ?? itemCount,
+  }
 }
 
 async function getEntitiesForIntegration(

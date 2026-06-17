@@ -29,69 +29,27 @@ export async function GET(req: Request) {
     statusParam && statusParam !== "all" ? statusParam : null
   const take = Math.min(Number(url.searchParams.get("take") ?? "50"), 100)
 
-  const [approvalRequests, corsairApprovals] = await Promise.all([
-    prisma.approvalRequest.findMany({
-      where: {
-        userId: session.user.id,
-        ...(status ? { status } : {}),
-      },
-      orderBy: { createdAt: "desc" },
-      take,
-    }),
+  const [approvals, pendingCount] = await Promise.all([
     getCorsairApprovals(session.user.id, status, take),
-  ])
-
-  const [pendingApprovalCount, pendingCorsairCount] = await Promise.all([
-    prisma.approvalRequest.count({
-      where: { userId: session.user.id, status: "pending" },
-    }),
     countPendingCorsairApprovals(session.user.id),
   ])
 
-  const approvals = [...approvalRequests, ...corsairApprovals]
-    .sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    )
-    .slice(0, take)
-
   return NextResponse.json({
     approvals,
-    pendingCount: pendingApprovalCount + pendingCorsairCount,
+    pendingCount,
   })
 }
 
-export async function POST(req: Request) {
+export async function POST() {
   const session = await getCurrentSession()
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const body = (await req.json()) as {
-    agentSessionId?: string
-    plugin: string
-    operation: string
-    description: string
-    inputJson: unknown
-  }
-
-  if (!body.plugin || !body.operation || !body.description) {
-    return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
-  }
-
-  const approval = await prisma.approvalRequest.create({
-    data: {
-      userId: session.user.id,
-      agentSessionId: body.agentSessionId ?? null,
-      plugin: body.plugin,
-      operation: body.operation,
-      description: body.description,
-      inputJson: body.inputJson as never,
-      status: "pending",
-    },
-  })
-
-  return NextResponse.json({ approval })
+  return NextResponse.json(
+    { error: "Approvals are created by Corsair permissions." },
+    { status: 410 }
+  )
 }
 
 async function getCorsairApprovals(
@@ -149,6 +107,7 @@ function mapCorsairPermissionToApproval(row: CorsairPermissionRow) {
     description: describeCorsairPermission(row),
     inputJson: parseJsonRecord(row.args),
     status: mapCorsairStatus(row.status),
+    error: row.error,
     decidedAt:
       row.status === "pending" ? null : new Date(row.updated_at).toISOString(),
     createdAt: new Date(row.created_at).toISOString(),
@@ -157,8 +116,32 @@ function mapCorsairPermissionToApproval(row: CorsairPermissionRow) {
 }
 
 function describeCorsairPermission(row: CorsairPermissionRow) {
-  const plugin = row.plugin === "googlecalendar" ? "Google Calendar" : "Gmail"
-  return `${plugin} wants to run ${row.endpoint}`
+  const input = parseJsonRecord(row.args)
+  const event = asRecord(input.event)
+  const summary = getString(event, "summary")
+
+  if (row.plugin === "gmail") {
+    if (row.endpoint === "messages.send") return "Send a Gmail message"
+    if (row.endpoint === "drafts.create") return "Save a Gmail draft"
+    if (row.endpoint === "drafts.send") return "Send a Gmail draft"
+    if (row.endpoint.includes(".trash")) return "Move a Gmail item to trash"
+    if (row.endpoint.includes(".delete")) return "Permanently delete a Gmail item"
+    if (row.endpoint.includes(".modify")) return "Update Gmail labels or read state"
+    return `Gmail wants to run ${row.endpoint}`
+  }
+
+  if (row.plugin === "googlecalendar") {
+    if (row.endpoint === "events.create") {
+      return summary ? `Create calendar event: ${summary}` : "Create a calendar event"
+    }
+    if (row.endpoint === "events.update") {
+      return summary ? `Update calendar event: ${summary}` : "Update a calendar event"
+    }
+    if (row.endpoint === "events.delete") return "Delete a calendar event"
+    return `Google Calendar wants to run ${row.endpoint}`
+  }
+
+  return `${row.plugin} wants to run ${row.endpoint}`
 }
 
 function mapCorsairStatus(status: string) {
@@ -177,4 +160,15 @@ function parseJsonRecord(value: string): Record<string, unknown> {
   } catch {
     return { value }
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+
+function getString(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key]
+  return typeof value === "string" && value.trim() ? value : null
 }

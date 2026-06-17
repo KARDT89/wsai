@@ -19,7 +19,7 @@ export async function POST(request: Request) {
 
   try {
     await ensureCorsairSetup(session.user.id)
-    const result = await syncGmailMailbox(session.user.id, mailbox)
+    const result = await syncGmailMailbox(session.user.id, mailbox, "manual")
 
     return NextResponse.json(result)
   } catch (error) {

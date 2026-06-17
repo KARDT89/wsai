@@ -50,7 +50,7 @@ export async function POST(req: Request) {
           // Stream an error event so the client shows something meaningful
           const errorEvent = {
             type: "text",
-            delta: `\n\n_Error: ${err instanceof Error ? err.message : "Agent failed"}_`,
+            delta: `\n\n${formatAgentStreamError(err)}`,
           }
           controller.enqueue(encoder.encode(JSON.stringify(errorEvent) + "\n"))
         } finally {
@@ -73,4 +73,17 @@ export async function POST(req: Request) {
       { status: 500 }
     )
   }
+}
+
+function formatAgentStreamError(error: unknown) {
+  const message = error instanceof Error ? error.message : "Agent failed"
+
+  if (/max turns/i.test(message)) {
+    return [
+      "I hit my tool-call limit before finding a match.",
+      "No action was taken. Try narrowing the request, or ask me to search a specific sender, date range, or mailbox.",
+    ].join(" ")
+  }
+
+  return `_Error: ${message}_`
 }

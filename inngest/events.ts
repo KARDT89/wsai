@@ -1,5 +1,5 @@
 import { inngest } from "@/inngest/client"
-import type { SyncableCorsairPluginId } from "@/lib/corsair/sync"
+import type { GmailMailbox, SyncableCorsairPluginId } from "@/lib/corsair/sync"
 
 export const corsairSyncEvents = {
   gmail: "wsai/gmail.sync.requested",
@@ -8,18 +8,23 @@ export const corsairSyncEvents = {
 
 export type CorsairSyncReason =
   | "manual"
+  | "user_action"
   | "oauth_callback"
   | "corsair_webhook"
+  | "agent_action"
+  | "stale_cache"
   | "scheduled"
 
 export async function enqueueCorsairSync({
   tenantId,
   plugin,
   reason,
+  mailbox,
 }: {
   tenantId: string
   plugin: SyncableCorsairPluginId
   reason: CorsairSyncReason
+  mailbox?: GmailMailbox
 }) {
   return inngest.send({
     name: corsairSyncEvents[plugin],
@@ -27,6 +32,7 @@ export async function enqueueCorsairSync({
       tenantId,
       plugin,
       reason,
+      mailbox,
     },
   })
 }

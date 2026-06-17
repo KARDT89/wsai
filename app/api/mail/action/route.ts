@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 
+import { enqueueCorsairSync } from "@/inngest/events"
 import { ensureCorsairSetup, getCorsairInstance } from "@/lib/corsair/server"
 import { getCurrentSession } from "@/lib/session"
 
@@ -63,6 +64,12 @@ export async function POST(request: Request) {
     await ensureCorsairSetup(session.user.id)
     const gmail = getCorsairInstance().withTenant(session.user.id).gmail.api
     const result = await runThreadAction(gmail, payload.threadId, payload.action, payload.labelId)
+    await enqueueCorsairSync({
+      tenantId: session.user.id,
+      plugin: "gmail",
+      reason: "user_action",
+      mailbox: targetMailboxForAction(payload.action),
+    })
 
     return NextResponse.json({ thread: result })
   } catch (error) {
@@ -74,6 +81,14 @@ export async function POST(request: Request) {
       { status: 500 }
     )
   }
+}
+
+function targetMailboxForAction(action: ThreadAction) {
+  if (action === "trash") return "trash"
+  if (action === "untrash") return "inbox"
+  if (action === "star" || action === "unstar") return "starred"
+  if (action === "archive" || action === "spam") return "inbox"
+  return "inbox"
 }
 
 function isThreadAction(action?: string): action is ThreadAction {

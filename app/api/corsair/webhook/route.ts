@@ -1,9 +1,7 @@
 import { processWebhook } from "corsair"
 import { NextResponse, type NextRequest } from "next/server"
 
-import { enqueueCorsairSync } from "@/inngest/events"
 import { getCorsairInstance } from "@/lib/corsair/server"
-import { isSyncableCorsairPlugin } from "@/lib/corsair/sync"
 
 export const runtime = "nodejs"
 
@@ -32,14 +30,6 @@ export async function POST(request: NextRequest) {
   const headers = Object.fromEntries(request.headers.entries())
   const query = Object.fromEntries(request.nextUrl.searchParams.entries())
   const result = await processWebhook(getCorsairInstance(), headers, body, query)
-
-  if (result.plugin && isSyncableCorsairPlugin(result.plugin)) {
-    await enqueueCorsairSync({
-      tenantId,
-      plugin: result.plugin,
-      reason: "corsair_webhook",
-    })
-  }
 
   const response = result.response ?? { success: Boolean(result.plugin) }
   const responseHeaders = new Headers({

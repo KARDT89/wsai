@@ -13,7 +13,7 @@ export async function POST() {
 
   try {
     await ensureCorsairSetup(session.user.id)
-    const result = await syncCorsairPlugin(session.user.id, "googlecalendar")
+    const result = await syncCorsairPlugin(session.user.id, "googlecalendar", "manual")
     return NextResponse.json(result)
   } catch (error) {
     return NextResponse.json(

@@ -199,7 +199,7 @@ function createCorsairInstance(approvalStrict: ApprovalStrict) {
       redirectUri: getCorsairRedirectUri(),
     },
     approval: {
-      timeout: "10m",
+      timeout: "60m",
       onTimeout: "deny",
       mode: "asynchronous",
       formatAsyncMessage: ({ plugin, endpoint }) =>
