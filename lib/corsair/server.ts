@@ -7,8 +7,6 @@ import type { CorsairPlugin } from "corsair/core"
 import { setupCorsair, type SetupCredentials } from "corsair/setup"
 import { Pool } from "pg"
 
-import { enqueueCorsairSync } from "@/inngest/events"
-import type { SyncableCorsairPluginId } from "@/lib/corsair/sync"
 
 const globalForCorsair = globalThis as unknown as {
   corsairPool?: Pool
@@ -103,11 +101,6 @@ function createCorsairPlugins({
   const gmailPlugin = withOAuthScopes(
     gmail({
       permissions: getGmailPermissions(approvalStrict),
-      webhookHooks: {
-        messageChanged: {
-          after: (ctx) => enqueueWebhookSync(ctx, "gmail"),
-        },
-      },
     }),
     [
       "https://www.googleapis.com/auth/gmail.modify",
@@ -119,11 +112,6 @@ function createCorsairPlugins({
   const googleCalendarPlugin = withOAuthScopes(
     googlecalendar({
       permissions: getCalendarPermissions(approvalStrict),
-      webhookHooks: {
-        onEventChanged: {
-          after: (ctx) => enqueueWebhookSync(ctx, "googlecalendar"),
-        },
-      },
     }),
     [
       "https://www.googleapis.com/auth/calendar",
@@ -288,20 +276,6 @@ function googleCredentialLabels() {
   ]
 }
 
-async function enqueueWebhookSync(
-  ctx: Record<string, unknown>,
-  plugin: SyncableCorsairPluginId
-) {
-  if (typeof ctx.tenantId !== "string") {
-    return
-  }
-
-  await enqueueCorsairSync({
-    tenantId: ctx.tenantId,
-    plugin,
-    reason: "corsair_webhook",
-  })
-}
 
 function withOAuthScopes<TPlugin extends CorsairPlugin>(
   plugin: TPlugin,

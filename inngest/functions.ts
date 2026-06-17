@@ -5,6 +5,7 @@ import {
   gmailMailboxes,
   syncGmailMailbox,
   syncCorsairPlugin,
+  listConnectedSyncTargets,
   type GmailMailbox,
   type SyncableCorsairPluginId,
 } from "@/lib/corsair/sync"
@@ -67,7 +68,31 @@ export const syncGoogleCalendarCache = inngest.createFunction(
   }
 )
 
+export const refreshConnectedWorkspaceCaches = inngest.createFunction(
+  {
+    id: "refresh-connected-workspace-caches",
+    triggers: { cron: "0 */12 * * *" },
+  },
+  async ({ step }) => {
+    const targets = await step.run("list-connected-sync-targets", () =>
+      listConnectedSyncTargets()
+    )
+
+    const results = await Promise.all(
+      targets.map((target) =>
+        step.run(
+          `sync-${target.plugin}-${target.tenantId}`,
+          () => runPluginSync(target.tenantId, target.plugin, "scheduled")
+        )
+      )
+    )
+
+    return { syncedTargets: results.length }
+  }
+)
+
 export const functions = [
   syncGmailCache,
   syncGoogleCalendarCache,
+  refreshConnectedWorkspaceCaches,
 ]

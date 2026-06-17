@@ -1,7 +1,8 @@
 import { processWebhook } from "corsair"
-import { NextResponse, type NextRequest } from "next/server"
+import { after, NextResponse, type NextRequest } from "next/server"
 
-import { getCorsairInstance } from "@/lib/corsair/server"
+import { getCorsairInstance, isKnownCorsairPlugin } from "@/lib/corsair/server"
+import { isSyncableCorsairPlugin, syncCorsairPlugin } from "@/lib/corsair/sync"
 
 export const runtime = "nodejs"
 
@@ -30,6 +31,16 @@ export async function POST(request: NextRequest) {
   const headers = Object.fromEntries(request.headers.entries())
   const query = Object.fromEntries(request.nextUrl.searchParams.entries())
   const result = await processWebhook(getCorsairInstance(), headers, body, query)
+
+  if (
+    tenantId &&
+    result.plugin &&
+    isKnownCorsairPlugin(result.plugin) &&
+    isSyncableCorsairPlugin(result.plugin)
+  ) {
+    const plugin = result.plugin as "gmail" | "googlecalendar"
+    after(() => syncCorsairPlugin(tenantId, plugin, "webhook"))
+  }
 
   const response = result.response ?? { success: Boolean(result.plugin) }
   const responseHeaders = new Headers({

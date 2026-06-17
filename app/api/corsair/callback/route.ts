@@ -37,7 +37,13 @@ export async function GET(request: NextRequest) {
     await ensureCorsairSetup(result.tenantId, true)
 
     if (isKnownCorsairPlugin(result.plugin) && isSyncableCorsairPlugin(result.plugin)) {
-      after(() => syncCorsairPlugin(result.tenantId, result.plugin, "oauth_callback"))
+      after(() =>
+        syncCorsairPlugin(
+          result.tenantId,
+          result.plugin as "gmail" | "googlecalendar",
+          "oauth_callback"
+        )
+      )
     }
 
     const dest =
