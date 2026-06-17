@@ -2,6 +2,8 @@ export type MailMessage = {
   id: string
   author: string
   email?: string
+  to?: string
+  cc?: string
   meta: string
   body: string
   bodyHtml?: string

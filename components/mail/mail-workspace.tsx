@@ -325,6 +325,28 @@ export function MailWorkspace() {
           action: selectedThread.unread ? "markRead" : "markUnread",
         })
       }
+
+      if (event.key === "r" && selectedThread) {
+        event.preventDefault()
+        openReply()
+      }
+
+      if (event.key === "a" && selectedThread) {
+        event.preventDefault()
+        openReplyAll()
+      }
+
+      if (event.key === "f" && selectedThread) {
+        event.preventDefault()
+        openForward()
+      }
+
+      if (event.key === "c") {
+        event.preventDefault()
+        setCompose(emptyCompose)
+        setComposeTitle("New message")
+        setComposeOpen(true)
+      }
     }
 
     window.addEventListener("keydown", onKeyDown)
@@ -371,6 +393,30 @@ export function MailWorkspace() {
       threadId: t.corsairId,
     })
     setComposeTitle("Reply")
+    setComposeOpen(true)
+  }
+
+  const openReplyAll = () => {
+    if (!selectedThread) return
+    const lastMessage = selectedThread.messages.at(-1)
+    const allTo = [
+      selectedThread.email ?? "",
+      lastMessage?.to ?? "",
+    ]
+      .flatMap((s) => s.split(","))
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const uniqueTo = [...new Set(allTo)].join(", ")
+    setCompose({
+      ...emptyCompose,
+      to: uniqueTo,
+      cc: lastMessage?.cc ?? "",
+      subject: selectedThread.subject.startsWith("Re:")
+        ? selectedThread.subject
+        : `Re: ${selectedThread.subject}`,
+      threadId: selectedThread.corsairId,
+    })
+    setComposeTitle("Reply all")
     setComposeOpen(true)
   }
 
@@ -460,6 +506,22 @@ export function MailWorkspace() {
               <div className="flex items-center justify-between">
                 <span>Search</span>
                 <kbd className="rounded border px-1 font-mono">/</kbd>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Reply</span>
+                <kbd className="rounded border px-1 font-mono">r</kbd>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Reply all</span>
+                <kbd className="rounded border px-1 font-mono">a</kbd>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Forward</span>
+                <kbd className="rounded border px-1 font-mono">f</kbd>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Compose</span>
+                <kbd className="rounded border px-1 font-mono">c</kbd>
               </div>
             </div>
           </div>
@@ -799,6 +861,15 @@ export function MailWorkspace() {
               onClick={() => openReply()}
             >
               Reply
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!selectedThread}
+              onClick={openReplyAll}
+            >
+              Reply all
             </Button>
           </div>
         </div>

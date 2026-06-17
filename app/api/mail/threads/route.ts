@@ -172,6 +172,8 @@ function toMailMessage(m: any): MailMessage {
     id: String(m.id ?? ""),
     author: parseName(from),
     email: parseEmail(from),
+    to: getHeader(m.payload, "To") ?? m.to ?? undefined,
+    cc: getHeader(m.payload, "Cc") ?? m.cc ?? undefined,
     meta: ts ? formatTs(ts) : "",
     body: m.body ?? bodyText ?? m.snippet ?? "",
     bodyText: bodyText ?? m.body,
