@@ -24,7 +24,7 @@ export async function POST(req: Request) {
   // Load user's custom API key (single DB read, cached at the row level by Prisma)
   const userSettings = await prisma.userSettings.findUnique({
     where: { userId: session.user.id },
-    select: { apiKey: true, apiKeyProvider: true },
+    select: { apiKey: true, apiKeyProvider: true, approvalStrict: true },
   })
 
   const fullPrompt = context

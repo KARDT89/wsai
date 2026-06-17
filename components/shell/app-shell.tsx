@@ -59,7 +59,7 @@ const navItems = [
   { href: "/mail", label: "Mail", icon: Mail01Icon, badge: "18" },
   { href: "/calendar", label: "Calendar", icon: CalendarDaysIcon },
   { href: "/agent", label: "Agent", icon: AiMail01Icon },
-  { href: "/approvals", label: "Approvals", icon: Shield01Icon, badge: "3" },
+  { href: "/approvals", label: "Approvals", icon: Shield01Icon },
   { href: "/settings", label: "Settings", icon: Settings05Icon },
   { href: "/integrations", label: "Integrations", icon: Database01Icon },
 ]
@@ -79,8 +79,23 @@ export function AppShell({ children, user }: AppShellProps) {
   const [commandOpen, setCommandOpen] = React.useState(false)
   const [aiOpen, setAiOpen] = React.useState(false)
   const [isSigningOut, setIsSigningOut] = React.useState(false)
+  const [pendingApprovals, setPendingApprovals] = React.useState(0)
   useAiContext()
   const { theme, setTheme } = useTheme()
+
+  const refreshPendingApprovals = React.useCallback(async () => {
+    try {
+      const response = await fetch("/api/approvals?status=pending", {
+        cache: "no-store",
+      })
+      if (!response.ok) return
+
+      const data = (await response.json()) as { pendingCount?: number }
+      setPendingApprovals(data.pendingCount ?? 0)
+    } catch {
+      // The badge is helpful context, not a blocker for using the shell.
+    }
+  }, [])
 
   // Global keyboard shortcuts
   React.useEffect(() => {
@@ -99,6 +114,27 @@ export function AppShell({ children, user }: AppShellProps) {
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
+
+  React.useEffect(() => {
+    const initialRefresh = window.setTimeout(() => {
+      void refreshPendingApprovals()
+    }, 0)
+
+    const interval = window.setInterval(() => {
+      void refreshPendingApprovals()
+    }, 60_000)
+
+    function onFocus() {
+      void refreshPendingApprovals()
+    }
+
+    window.addEventListener("focus", onFocus)
+    return () => {
+      window.clearTimeout(initialRefresh)
+      window.clearInterval(interval)
+      window.removeEventListener("focus", onFocus)
+    }
+  }, [refreshPendingApprovals])
 
   const activeItem =
     navItems.find((item) => pathname.startsWith(item.href)) ?? navItems[0]
@@ -138,6 +174,12 @@ export function AppShell({ children, user }: AppShellProps) {
         <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
           {navItems.map((item) => {
             const active = pathname.startsWith(item.href)
+            const badge =
+              item.href === "/approvals"
+                ? pendingApprovals > 0
+                  ? String(pendingApprovals)
+                  : undefined
+                : item.badge
             return (
               <Button
                 key={item.href}
@@ -151,9 +193,9 @@ export function AppShell({ children, user }: AppShellProps) {
                 <Link href={item.href}>
                   <HugeiconsIcon icon={item.icon} strokeWidth={2} className="size-4" />
                   <span>{item.label}</span>
-                  {item.badge ? (
+                  {badge ? (
                     <span className="ml-auto rounded-md bg-primary/15 px-1.5 py-0.5 font-mono text-[11px] text-primary">
-                      {item.badge}
+                      {badge}
                     </span>
                   ) : null}
                 </Link>
@@ -353,7 +395,7 @@ export function AppShell({ children, user }: AppShellProps) {
               </CommandItem>
               <CommandItem onSelect={() => openAiWithPrompt("What's on my calendar this week?")}>
                 <HugeiconsIcon icon={AiChat01Icon} strokeWidth={2} className="size-4" />
-                What's on my calendar this week?
+                What&apos;s on my calendar this week?
               </CommandItem>
             </CommandGroup>
 

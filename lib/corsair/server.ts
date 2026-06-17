@@ -1,5 +1,7 @@
 import { gmail } from "@corsair-dev/gmail"
+import type { GmailPluginOptions } from "@corsair-dev/gmail"
 import { googlecalendar } from "@corsair-dev/googlecalendar"
+import type { GoogleCalendarPluginOptions } from "@corsair-dev/googlecalendar"
 import { createCorsair } from "corsair"
 import type { CorsairPlugin } from "corsair/core"
 import { setupCorsair, type SetupCredentials } from "corsair/setup"
@@ -12,36 +14,127 @@ const globalForCorsair = globalThis as unknown as {
   corsairPool?: Pool
 }
 
-const gmailPlugin = withOAuthScopes(
-  gmail({
-    webhookHooks: {
-      messageChanged: {
-        after: (ctx) => enqueueWebhookSync(ctx, "gmail"),
-      },
-    },
-  }),
-  [
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.compose",
-  ]
-)
+export type ApprovalStrict = "all" | "writes" | "never"
 
-const googleCalendarPlugin = withOAuthScopes(
-  googlecalendar({
-    webhookHooks: {
-      onEventChanged: {
-        after: (ctx) => enqueueWebhookSync(ctx, "googlecalendar"),
-      },
-    },
-  }),
-  [
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/calendar.events",
-  ]
-)
+type GmailApprovalOverrides = NonNullable<
+  NonNullable<GmailPluginOptions["permissions"]>["overrides"]
+>
+type CalendarApprovalOverrides = NonNullable<
+  NonNullable<GoogleCalendarPluginOptions["permissions"]>["overrides"]
+>
 
-export const corsairPlugins = [gmailPlugin, googleCalendarPlugin] as const
+const GMAIL_WRITE_APPROVAL_OVERRIDES = {
+  "messages.send": "require_approval",
+  "messages.modify": "require_approval",
+  "messages.batchModify": "require_approval",
+  "messages.trash": "require_approval",
+  "messages.untrash": "require_approval",
+  "messages.delete": "require_approval",
+  "drafts.create": "require_approval",
+  "drafts.update": "require_approval",
+  "drafts.delete": "require_approval",
+  "drafts.send": "require_approval",
+  "threads.modify": "require_approval",
+  "threads.trash": "require_approval",
+  "threads.untrash": "require_approval",
+  "threads.delete": "require_approval",
+  "labels.create": "require_approval",
+  "labels.update": "require_approval",
+  "labels.delete": "require_approval",
+} satisfies GmailApprovalOverrides
+
+const GMAIL_ALL_APPROVAL_OVERRIDES = {
+  "messages.list": "require_approval",
+  "messages.get": "require_approval",
+  "labels.list": "require_approval",
+  "labels.get": "require_approval",
+  "drafts.list": "require_approval",
+  "drafts.get": "require_approval",
+  "threads.list": "require_approval",
+  "threads.get": "require_approval",
+  ...GMAIL_WRITE_APPROVAL_OVERRIDES,
+} satisfies GmailApprovalOverrides
+
+const CALENDAR_WRITE_APPROVAL_OVERRIDES = {
+  "events.create": "require_approval",
+  "events.update": "require_approval",
+  "events.delete": "require_approval",
+} satisfies CalendarApprovalOverrides
+
+const CALENDAR_ALL_APPROVAL_OVERRIDES = {
+  "events.get": "require_approval",
+  "events.getMany": "require_approval",
+  "calendar.getAvailability": "require_approval",
+  ...CALENDAR_WRITE_APPROVAL_OVERRIDES,
+} satisfies CalendarApprovalOverrides
+
+function normalizeApprovalStrict(value?: string | null): ApprovalStrict {
+  if (value === "all" || value === "never") return value
+  return "writes"
+}
+
+function getGmailPermissions(approvalStrict: ApprovalStrict) {
+  if (approvalStrict === "never") return undefined
+
+  return {
+    mode: "cautious" as const,
+    overrides:
+      approvalStrict === "all"
+        ? GMAIL_ALL_APPROVAL_OVERRIDES
+        : GMAIL_WRITE_APPROVAL_OVERRIDES,
+  }
+}
+
+function getCalendarPermissions(approvalStrict: ApprovalStrict) {
+  if (approvalStrict === "never") return undefined
+
+  return {
+    mode: "cautious" as const,
+    overrides:
+      approvalStrict === "all"
+        ? CALENDAR_ALL_APPROVAL_OVERRIDES
+        : CALENDAR_WRITE_APPROVAL_OVERRIDES,
+  }
+}
+
+function createCorsairPlugins({
+  approvalStrict = "never",
+}: { approvalStrict?: ApprovalStrict } = {}) {
+  const gmailPlugin = withOAuthScopes(
+    gmail({
+      permissions: getGmailPermissions(approvalStrict),
+      webhookHooks: {
+        messageChanged: {
+          after: (ctx) => enqueueWebhookSync(ctx, "gmail"),
+        },
+      },
+    }),
+    [
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.compose",
+    ]
+  )
+
+  const googleCalendarPlugin = withOAuthScopes(
+    googlecalendar({
+      permissions: getCalendarPermissions(approvalStrict),
+      webhookHooks: {
+        onEventChanged: {
+          after: (ctx) => enqueueWebhookSync(ctx, "googlecalendar"),
+        },
+      },
+    }),
+    [
+      "https://www.googleapis.com/auth/calendar",
+      "https://www.googleapis.com/auth/calendar.events",
+    ]
+  )
+
+  return [gmailPlugin, googleCalendarPlugin] as const
+}
+
+export const corsairPlugins = createCorsairPlugins()
 
 export type CorsairPluginId = (typeof corsairPlugins)[number]["id"]
 
@@ -64,6 +157,14 @@ export function getCorsairRedirectUri() {
 }
 
 export function getCorsairInstance() {
+  return createCorsairInstance("never")
+}
+
+export function getCorsairAgentInstance(approvalStrict: string | null = "writes") {
+  return createCorsairInstance(normalizeApprovalStrict(approvalStrict))
+}
+
+function createCorsairInstance(approvalStrict: ApprovalStrict) {
   const databaseUrl = process.env.DATABASE_URL
   const kek = process.env.CORSAIR_KEK ?? process.env.BETTER_AUTH_SECRET
 
@@ -87,7 +188,10 @@ export function getCorsairInstance() {
 
   return createCorsair({
     database: pool,
-    plugins: corsairPlugins,
+    plugins:
+      approvalStrict === "never"
+        ? corsairPlugins
+        : createCorsairPlugins({ approvalStrict }),
     multiTenancy: true,
     kek,
     connect: {
@@ -98,6 +202,8 @@ export function getCorsairInstance() {
       timeout: "10m",
       onTimeout: "deny",
       mode: "asynchronous",
+      formatAsyncMessage: ({ plugin, endpoint }) =>
+        `Approval required for ${plugin}.${endpoint}. Ask the user to review it at /approvals, then stop.`,
     },
   })
 }

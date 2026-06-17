@@ -35,11 +35,7 @@ export default function ApprovalsPage() {
   const [loading, setLoading] = React.useState(true)
   const [acting, setActing] = React.useState<string | null>(null)
 
-  React.useEffect(() => {
-    void load()
-  }, [filter])
-
-  async function load() {
+  const load = React.useCallback(async () => {
     setLoading(true)
     try {
       const url = filter === "pending" ? "/api/approvals?status=pending" : "/api/approvals"
@@ -52,25 +48,37 @@ export default function ApprovalsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [filter])
+
+  React.useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void load()
+    }, 0)
+
+    return () => window.clearTimeout(timeout)
+  }, [load])
 
   async function decide(id: string, action: "approve" | "reject") {
     setActing(id)
     try {
-      const res = await fetch(`/api/approvals/${id}`, {
+      const res = await fetch(`/api/approvals/${encodeURIComponent(id)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action }),
       })
+      const data = (await res.json()) as { approval?: Approval; error?: string }
       if (!res.ok) {
-        const err = (await res.json()) as { error?: string }
-        throw new Error(err.error ?? "Failed")
+        throw new Error(data.error ?? "Failed")
       }
       toast.success(action === "approve" ? "Action approved and executed" : "Action rejected")
       setApprovals((prev) =>
         prev.map((a) =>
           a.id === id
-            ? { ...a, status: action === "approve" ? "approved" : "rejected", decidedAt: new Date().toISOString() }
+            ? data.approval ?? {
+                ...a,
+                status: action === "approve" ? "approved" : "rejected",
+                decidedAt: new Date().toISOString(),
+              }
             : a
         )
       )
@@ -86,7 +94,7 @@ export default function ApprovalsPage() {
 
   async function deleteApproval(id: string) {
     try {
-      await fetch(`/api/approvals/${id}`, { method: "DELETE" })
+      await fetch(`/api/approvals/${encodeURIComponent(id)}`, { method: "DELETE" })
       setApprovals((prev) => prev.filter((a) => a.id !== id))
     } catch {
       toast.error("Failed to delete")

@@ -3,6 +3,11 @@ import { NextResponse } from "next/server"
 import { prisma } from "@/lib/db"
 import { getCurrentSession } from "@/lib/session"
 
+function normalizeApprovalStrict(value?: string | null) {
+  if (value === "all" || value === "writes" || value === "never") return value
+  return "writes"
+}
+
 export async function GET() {
   const session = await getCurrentSession()
   if (!session?.user?.id) {
@@ -47,14 +52,16 @@ export async function PUT(req: Request) {
       apiKeyProvider: body.apiKeyProvider ?? null,
       apiKey: body.apiKey ?? null,
       aiTone: body.aiTone ?? "professional",
-      approvalStrict: body.approvalStrict ?? "writes",
+      approvalStrict: normalizeApprovalStrict(body.approvalStrict),
       emailSignature: body.emailSignature ?? null,
     },
     update: {
       ...(body.apiKeyProvider !== undefined && { apiKeyProvider: body.apiKeyProvider }),
       ...(body.apiKey !== undefined && { apiKey: body.apiKey }),
       ...(body.aiTone !== undefined && { aiTone: body.aiTone }),
-      ...(body.approvalStrict !== undefined && { approvalStrict: body.approvalStrict }),
+      ...(body.approvalStrict !== undefined && {
+        approvalStrict: normalizeApprovalStrict(body.approvalStrict),
+      }),
       ...(body.emailSignature !== undefined && { emailSignature: body.emailSignature }),
     },
   })

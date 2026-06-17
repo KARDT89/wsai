@@ -402,6 +402,11 @@ export function CalendarDashboard() {
 
       {/* ── Create / Edit dialog ── */}
       <EventDialog
+        key={
+          dialogState.open
+            ? `${dialogState.mode}-${dialogState.event?.id ?? "new"}-${dialogState.prefillStart ?? ""}`
+            : "closed"
+        }
         open={dialogState.open}
         mode={dialogState.mode}
         event={dialogState.event}
@@ -686,7 +691,7 @@ function MonthView({
             <div
               key={day.toISOString()}
               className={cn(
-                "border-b border-r last:border-r-0 p-1 min-h-[100px] cursor-pointer hover:bg-muted/30 transition-colors",
+                "border-b border-r last:border-r-0 p-1 min-h-25 cursor-pointer hover:bg-muted/30 transition-colors",
                 !inMonth && "opacity-40"
               )}
               onClick={() => onClickDay(day)}
@@ -791,7 +796,7 @@ function EventDetailPanel({
   isDeleting: boolean
 }) {
   return (
-    <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l bg-background shadow-xl lg:inset-y-[3.5rem]">
+    <div className="fixed inset-y-0 right-0 z-40 flex w-full max-w-sm flex-col border-l bg-background shadow-xl lg:inset-y">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <span className="text-sm font-semibold">Event Details</span>
         <div className="flex items-center gap-1">
@@ -879,7 +884,7 @@ function DetailRow({
   return (
     <div className="flex items-start gap-3 text-sm">
       <HugeiconsIcon icon={icon} strokeWidth={2} className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 break-words">{children}</span>
+      <span className="min-w-0 wrap-break-words">{children}</span>
     </div>
   )
 }
@@ -894,6 +899,40 @@ type EventForm = {
   description: string
   attendees: string
   allDay: boolean
+}
+
+function initialEventForm({
+  mode,
+  event,
+  defaultStart,
+  defaultEnd,
+}: {
+  mode: "create" | "edit"
+  event?: CalendarEvent
+  defaultStart: string
+  defaultEnd: string
+}): EventForm {
+  if (mode === "edit" && event) {
+    return {
+      title: event.title,
+      startDatetime: toLocalDatetimeInput(event.startsAt),
+      endDatetime: toLocalDatetimeInput(event.endsAt),
+      location: event.location ?? "",
+      description: event.description ?? "",
+      attendees: event.attendees.join(", "),
+      allDay: false,
+    }
+  }
+
+  return {
+    title: "",
+    startDatetime: defaultStart,
+    endDatetime: defaultEnd,
+    location: "",
+    description: "",
+    attendees: "",
+    allDay: false,
+  }
 }
 
 function EventDialog({
@@ -931,42 +970,9 @@ function EventDialog({
     return toLocalDatetimeInput(d.toISOString())
   }, [prefillStart])
 
-  const [form, setForm] = React.useState<EventForm>({
-    title: "",
-    startDatetime: defaultStart,
-    endDatetime: defaultEnd,
-    location: "",
-    description: "",
-    attendees: "",
-    allDay: false,
-  })
-
-  // Populate form from event when editing
-  React.useEffect(() => {
-    if (!open) return
-    if (mode === "edit" && event) {
-      setForm({
-        title: event.title,
-        startDatetime: toLocalDatetimeInput(event.startsAt),
-        endDatetime: toLocalDatetimeInput(event.endsAt),
-        location: event.location ?? "",
-        description: event.description ?? "",
-        attendees: event.attendees.join(", "),
-        allDay: false,
-      })
-    } else {
-      setForm({
-        title: "",
-        startDatetime: defaultStart,
-        endDatetime: defaultEnd,
-        location: "",
-        description: "",
-        attendees: "",
-        allDay: false,
-      })
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, mode])
+  const [form, setForm] = React.useState<EventForm>(() =>
+    initialEventForm({ mode, event, defaultStart, defaultEnd })
+  )
 
   const saveMutation = useMutation({
     mutationFn: async () => {

@@ -435,10 +435,10 @@ export default function AgentPage() {
   const isEmptyState = messages.length === 0
 
   return (
-    <div className="flex h-[calc(100svh-3.5rem)] bg-background">
+    <div className="flex h-[calc(100svh-3.5rem)] min-h-0 bg-background">
       {/* Conversation sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r bg-muted/20 lg:flex">
-        <div className="p-3">
+      <aside className="hidden min-h-0 w-64 shrink-0 flex-col border-r bg-muted/20 lg:flex">
+        <div className="shrink-0 p-3">
           <Button className="w-full justify-start gap-2" variant="outline" onClick={startNewChat}>
             <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} className="size-4" />
             New chat
@@ -447,7 +447,7 @@ export default function AgentPage() {
 
         <Separator />
 
-        <ScrollArea className="flex-1">
+        <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-0.5 p-2">
             {!sessionsLoaded ? (
               <div className="flex items-center justify-center py-8">
@@ -462,34 +462,43 @@ export default function AgentPage() {
                 No conversations yet
               </p>
             ) : (
-              sessionList.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  className={cn(
-                    "group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted",
-                    activeSession?.id === s.id && "bg-muted font-medium"
-                  )}
-                  onClick={() => void loadSession(s.id)}
-                >
-                  <span className="flex-1 truncate">{s.title}</span>
-                  <button
-                    type="button"
-                    className="shrink-0 opacity-0 transition-opacity group-hover:opacity-50 hover:opacity-100!"
-                    onClick={(e) => void deleteSession(s.id, e)}
+              sessionList.map((s) => {
+                const active = activeSession?.id === s.id
+
+                return (
+                  <div
+                    key={s.id}
+                    className={cn(
+                      "group grid w-full min-w-0 grid-cols-[minmax(0,1fr)_1.75rem] items-center overflow-hidden rounded-md transition-colors hover:bg-muted",
+                      active && "bg-muted font-medium"
+                    )}
                   >
-                    <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-3.5" />
-                    <span className="sr-only">Delete</span>
-                  </button>
-                </button>
-              ))
+                    <button
+                      type="button"
+                      className="block min-w-0 overflow-hidden truncate rounded-md px-2 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      title={s.title}
+                      onClick={() => void loadSession(s.id)}
+                    >
+                      {s.title}
+                    </button>
+                    <button
+                      type="button"
+                      className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+                      onClick={(e) => void deleteSession(s.id, e)}
+                    >
+                      <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} className="size-3.5" />
+                      <span className="sr-only">Delete</span>
+                    </button>
+                  </div>
+                )
+              })
             )}
           </div>
         </ScrollArea>
 
         <Separator />
 
-        <div className="p-3">
+        <div className="shrink-0 p-3">
           <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             Model
           </p>
@@ -619,15 +628,18 @@ export default function AgentPage() {
 
         {/* Thread picker backdrop */}
         {pickerOpen ? (
-          <div className="fixed inset-0 z-10" onClick={() => setPickerOpen(false)} />
+          <div className="fixed inset-0 z-40" onClick={() => setPickerOpen(false)} />
         ) : null}
 
         {/* Input bar */}
         <div className="relative shrink-0 border-t bg-background/80 backdrop-blur-sm">
           {/* Thread picker popup */}
           {pickerOpen ? (
-            <div className="absolute bottom-full left-1/2 z-20 mb-2 w-96 -translate-x-1/2 overflow-hidden rounded-2xl border bg-background/95 shadow-2xl backdrop-blur-xl ring-1 ring-black/5 dark:ring-white/10">
-              <div className="flex items-center justify-between border-b px-4 py-2.5">
+            <div
+              className="fixed bottom-28 left-1/2 z-50 flex max-h-[min(28rem,calc(100svh-9rem))] w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 flex-col overflow-hidden rounded-2xl border bg-background/95 shadow-2xl backdrop-blur-xl ring-1 ring-black/5 dark:ring-white/10"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex shrink-0 items-center justify-between border-b px-4 py-2.5">
                 <span className="text-xs font-semibold">Attach a thread as context</span>
                 <button
                   type="button"
@@ -637,7 +649,7 @@ export default function AgentPage() {
                   <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-3.5" />
                 </button>
               </div>
-              <div className="max-h-72 overflow-y-auto">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                 {threadsLoading ? (
                   <div className="flex items-center justify-center py-8">
                     <HugeiconsIcon
@@ -655,7 +667,7 @@ export default function AgentPage() {
                     <button
                       key={t.id}
                       type="button"
-                      className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/60"
+                      className="flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
                       onClick={() => attachThread(t)}
                     >
                       <ThreadAvatar sender={t.sender} />

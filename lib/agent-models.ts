@@ -11,4 +11,4 @@ export const AVAILABLE_MODELS = [
 ] as const
 
 export type ModelId = (typeof AVAILABLE_MODELS)[number]["id"]
-export const DEFAULT_MODEL: ModelId = "openai/gpt-4o"
+export const DEFAULT_MODEL: ModelId = "openai/gpt-4o-mini"

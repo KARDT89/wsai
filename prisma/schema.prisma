@@ -23,61 +23,13 @@ model User {
   sessions        Session[]
   accounts        Account[]
   corsairAccounts CorsairAccount[]
+  corsairPermissions CorsairPermission[]
   agentSessions    AgentSession[]
   settings         UserSettings?
   approvalRequests ApprovalRequest[]
 
   @@unique([email])
   @@map("user")
-}
-
-model AgentSession {
-  id        String   @id @default(cuid())
-  userId    String
-  title     String
-  model     String
-  messages  Json     @default("[]")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("agent_sessions")
-}
-
-model UserSettings {
-  id             String  @id @default(cuid())
-  userId         String  @unique
-  apiKeyProvider String? // "openrouter" | "openai" | "anthropic"
-  apiKey         String? // user-supplied key (store encrypted in production)
-  aiTone         String  @default("professional") // "professional" | "casual" | "concise"
-  approvalStrict String  @default("writes") // "all" | "writes" | "never"
-  emailSignature String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("user_settings")
-}
-
-model ApprovalRequest {
-  id             String    @id @default(cuid())
-  userId         String
-  agentSessionId String?
-  plugin         String
-  operation      String
-  description    String
-  inputJson      Json
-  status         String    @default("pending")
-  decidedAt      DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([status])
-  @@map("approval_requests")
 }
 
 model Session {
@@ -184,4 +136,76 @@ model CorsairEvent {
   account   CorsairAccount @relation(fields: [accountId], references: [id])
 
   @@map("corsair_events")
+}
+
+model CorsairPermission {
+  id        String   @id
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  token     String
+  plugin    String
+  endpoint  String
+  args      String
+  tenantId  String   @map("tenant_id")
+  status    String   @default("pending")
+  expiresAt String   @map("expires_at")
+  error     String?
+
+  tenant User @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([token])
+  @@map("corsair_permissions")
+}
+
+// settings
+
+model AgentSession {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  model     String
+  messages  Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("agent_sessions")
+}
+
+model UserSettings {
+  id             String  @id @default(cuid())
+  userId         String  @unique
+  apiKeyProvider String? // "openrouter" | "openai" | "anthropic"
+  apiKey         String? // user-supplied key (store encrypted in production)
+  aiTone         String  @default("professional") // "professional" | "casual" | "concise"
+  approvalStrict String  @default("writes") // "all" | "writes" | "never"
+  emailSignature String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
+model ApprovalRequest {
+  id             String    @id @default(cuid())
+  userId         String
+  agentSessionId String?
+  plugin         String
+  operation      String
+  description    String
+  inputJson      Json
+  status         String    @default("pending")
+  decidedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("approval_requests")
 }

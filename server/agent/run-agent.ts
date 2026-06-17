@@ -1,14 +1,8 @@
 import { OpenAIAgentsProvider } from "@corsair-dev/mcp"
 import { Agent, OpenAIProvider, Runner, tool } from "@openai/agents"
 
-import { getCorsairInstance } from "@/lib/corsair/server"
+import { getCorsairAgentInstance } from "@/lib/corsair/server"
 import { DEFAULT_MODEL } from "@/lib/agent-models"
-
-// Register all plugins (side-effect imports)
-import "./plugins/gmail"
-import "./plugins/googlecalendar"
-
-import { buildPluginSystemPrompt, labelFromPlugins } from "./plugins/index"
 
 export { AVAILABLE_MODELS, DEFAULT_MODEL } from "@/lib/agent-models"
 export type { ModelId } from "@/lib/agent-models"
@@ -70,42 +64,82 @@ function labelForToolCall(name: string, rawArgs: string): string {
     }
     case "run_script": {
       const code = typeof args.code === "string" ? args.code : ""
-      return labelFromPlugins(code) ?? "Running operation"
+      return labelForCorsairScript(code)
     }
     default:
       return name.replace(/_/g, " ")
   }
 }
 
+function labelForCorsairScript(code: string): string {
+  if (/gmail\.api\.threads\.list|gmail\.api\.messages\.list/.test(code)) {
+    return "Searching Gmail"
+  }
+  if (/gmail\.api\.threads\.get|gmail\.api\.messages\.get/.test(code)) {
+    return "Reading Gmail"
+  }
+  if (/gmail\.api\.messages\.send|gmail\.api\.drafts\.send/.test(code)) {
+    return "Requesting email send"
+  }
+  if (/gmail\.api\.(threads|messages)\.(modify|trash|delete|untrash)/.test(code)) {
+    return "Requesting email update"
+  }
+  if (/googlecalendar\.api\.events\.getMany/.test(code)) {
+    return "Fetching calendar"
+  }
+  if (/googlecalendar\.api\.events\.get/.test(code)) {
+    return "Reading calendar event"
+  }
+  if (/googlecalendar\.api\.events\.(create|update|delete)/.test(code)) {
+    return "Requesting calendar change"
+  }
+  if (/googlecalendar\.api\.calendar\.getAvailability/.test(code)) {
+    return "Checking availability"
+  }
+  return "Running Corsair operation"
+}
+
 // ─── System prompt ──────────────────────────────────────────────────────────
 
-function buildSystemPrompt(): string {
+function buildApprovalInstructions(approvalStrict?: string | null): string {
+  if (approvalStrict === "never") {
+    return "Read, write, and destructive Corsair actions may run immediately because the user disabled approval gating."
+  }
+
+  if (approvalStrict === "all") {
+    return "All Corsair operations, including reads, are permission-gated. If a tool result says approval is required or pending, stop and tell the user to review it on /approvals. Do not retry the same operation until the user approves it."
+  }
+
+  return "Read-only actions may run immediately. Write or destructive operations are permission-gated by Corsair. If a tool result says approval is required or pending, stop and tell the user to review it on /approvals. Do not retry the same write until the user approves it."
+}
+
+function buildSystemPrompt(approvalStrict?: string | null): string {
   return `
 You are the WSAI workspace assistant. You help users manage their Gmail and Google Calendar.
 
-## Tool usage
+## Corsair tool usage
 
-Call run_script directly. Do NOT call corsair_setup, list_operations, or get_schema.
+Use the Corsair MCP tools for any configured integration:
+- Use list_operations with the relevant plugin and type "api" to discover available endpoints.
+- Use get_schema for the exact endpoint before calling unfamiliar operations or any write/destructive operation.
+- Use run_script to execute Corsair operations with the provided corsair object.
 
-If run_script returns an error containing "unauthorized", "no token", "not connected", or similar, tell the user that integration needs to be connected at /integrations and stop.
+If an integration is not connected, tell the user to connect it at /integrations and stop.
 
-All operation syntax is documented below.
+## Token and latency budget
 
-${buildPluginSystemPrompt()}
+- Prefer narrow discovery: call list_operations for one plugin at a time, not all plugins.
+- Prefer list/search endpoints with maxResults <= 10 unless the user explicitly asks for more.
+- For Gmail summaries, use thread/message snippets and metadata. Do not call threads.get or messages.get in a loop.
+- Only fetch full email bodies when the user asks to read a specific single email/thread.
+- Return only the fields needed from run_script; filter large API responses inside the script.
+- Do not repeat schemas or raw JSON to the user unless asked.
 
-## Behavioural rules
+## Approval and safety
 
-AUTONOMY: Never ask the user for clarification, confirmation, or more information. If the user asks you to do something, do it immediately using your best judgment.
+${buildApprovalInstructions(approvalStrict)}
 
-- Read/search: execute immediately, no preamble.
-- Send email: compose the full email yourself (subject, body, tone). Send it. Do not ask what to write.
-- Draft reply: read the thread first, compose a reply that fits the conversation context.
-- Create event: pick reasonable defaults for duration if not specified. Create it.
-- Write operations (send, delete, create event): say what you did in one sentence after completing.
-- Summarise threads: use the snippet from threads.list. Do NOT call threads.get for each thread — that explodes token usage.
-- Only call threads.get (format: "full") when the user asks to open or read a specific single email.
-- Limit threads.list and messages.list to maxResults: 10 unless asked for more.
-- If a tool call returns an error, report the exact error in one sentence. Do not retry.
+Be concise. Do not ask for clarification unless the request cannot be completed safely with the available context.
 `.trim()
 }
 
@@ -114,6 +148,7 @@ AUTONOMY: Never ask the user for clarification, confirmation, or more informatio
 export type AgentProviderOpts = {
   apiKey?: string | null
   apiKeyProvider?: string | null
+  approvalStrict?: string | null
 }
 
 export async function* streamWsaiAgentEvents(
@@ -122,9 +157,9 @@ export async function* streamWsaiAgentEvents(
   model: string = DEFAULT_MODEL,
   providerOpts?: AgentProviderOpts
 ): AsyncGenerator<AgentStreamEvent> {
-  const corsair = getCorsairInstance().withTenant(tenantId)
+  const corsair = getCorsairAgentInstance(providerOpts?.approvalStrict).withTenant(tenantId)
   const provider = new OpenAIAgentsProvider()
-  const tools = provider.build({ corsair, tool, tenantId })
+  const tools = await provider.build({ corsair, tool, tenantId })
 
   const modelProvider = buildProvider({
     apiKey: providerOpts?.apiKey,
@@ -134,7 +169,7 @@ export async function* streamWsaiAgentEvents(
   const agent = new Agent({
     name: "wsai-agent",
     model,
-    instructions: buildSystemPrompt(),
+    instructions: buildSystemPrompt(providerOpts?.approvalStrict),
     tools,
   })
 
