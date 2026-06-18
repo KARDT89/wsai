@@ -4,7 +4,7 @@ import { type NextRequest } from "next/server"
 import { getCorsairInstance } from "@/lib/corsair/server"
 import { findTenantByWebhookChannel } from "@/lib/corsair/webhook-channels"
 import { prisma } from "@/lib/db"
-import { Prisma } from "@/lib/generated/prisma/client"
+import { Prisma } from "@/generated/prisma/client"
 
 export const WEBHOOK_ENDPOINT = "/api/webhooks"
 
