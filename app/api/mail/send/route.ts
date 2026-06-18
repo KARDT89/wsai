@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server"
+import { after, NextResponse } from "next/server"
 
-import { triggerSync } from "@/inngest/client"
 import { createRfc822Message, encodeBase64Url } from "@/lib/mail/mime"
+import { logReliableSyncFailure, requestReliableSync } from "@/lib/corsair/reliable-sync"
 import { ensureCorsairSetup, getCorsairInstance } from "@/lib/corsair/server"
 import { getCurrentSession } from "@/lib/session"
 
@@ -47,7 +47,13 @@ export async function POST(request: Request) {
         threadId: payload.threadId,
       })
 
-    void triggerSync(session.user.id, "gmail", "user_action")
+    after(() =>
+      requestReliableSync({
+        tenantId: session.user.id,
+        plugin: "gmail",
+        reason: "user_action",
+      }).catch(logReliableSyncFailure("mail send"))
+    )
 
     return NextResponse.json({ message: result })
   } catch (error) {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 
-import { syncCorsairPlugin } from "@/lib/corsair/sync"
+import { requestReliableSync } from "@/lib/corsair/reliable-sync"
 import { ensureCorsairSetup } from "@/lib/corsair/server"
 import { getCurrentSession } from "@/lib/session"
 
@@ -13,7 +13,13 @@ export async function POST() {
 
   try {
     await ensureCorsairSetup(session.user.id)
-    const result = await syncCorsairPlugin(session.user.id, "googlecalendar", "manual")
+    const result = await requestReliableSync({
+      tenantId: session.user.id,
+      plugin: "googlecalendar",
+      reason: "manual",
+      inlineFallback: true,
+      enqueue: false,
+    })
     return NextResponse.json(result)
   } catch (error) {
     return NextResponse.json(

@@ -1,61 +1,25 @@
-import { processWebhook } from "corsair"
 import { NextResponse, type NextRequest } from "next/server"
 
-import { triggerSync } from "@/inngest/client"
-import { getCorsairInstance, isKnownCorsairPlugin } from "@/lib/corsair/server"
-import { isSyncableCorsairPlugin } from "@/lib/corsair/sync"
+import { WEBHOOK_ENDPOINT } from "@/app/api/webhooks/webhook-handler"
 
 export const runtime = "nodejs"
 
 export async function GET() {
-  return NextResponse.json({
-    ok: true,
-    endpoint: "/api/corsair/webhook",
-  })
+  return NextResponse.json(
+    {
+      ok: false,
+      deprecated: true,
+      endpoint: "/api/corsair/webhook",
+      replacement: WEBHOOK_ENDPOINT,
+      expectedUrl: WEBHOOK_ENDPOINT,
+    },
+    { status: 410 }
+  )
 }
 
 export async function POST(request: NextRequest) {
-  const tenantId = request.nextUrl.searchParams.get("tenantId")
+  const replacement = new URL(WEBHOOK_ENDPOINT, request.url)
+  replacement.search = request.nextUrl.search
 
-  if (!tenantId) {
-    return NextResponse.json(
-      {
-        error:
-          "Missing tenantId. Send Corsair webhooks to /api/corsair/webhook?tenantId=<better-auth-user-id>.",
-      },
-      { status: 400 }
-    )
-  }
-
-  const rawBody = await request.text()
-  const body = rawBody.length > 0 ? rawBody : {}
-  const headers = Object.fromEntries(request.headers.entries())
-  const query = Object.fromEntries(request.nextUrl.searchParams.entries())
-  const result = await processWebhook(getCorsairInstance(), headers, body, query)
-
-  if (
-    tenantId &&
-    result.plugin &&
-    isKnownCorsairPlugin(result.plugin) &&
-    isSyncableCorsairPlugin(result.plugin)
-  ) {
-    const plugin = result.plugin as "gmail" | "googlecalendar"
-    void triggerSync(tenantId, plugin, "webhook")
-  }
-
-  const response = result.response ?? { success: Boolean(result.plugin) }
-  const responseHeaders = new Headers({
-    "content-type": "application/json",
-  })
-
-  if (result.responseHeaders) {
-    for (const [key, value] of Object.entries(result.responseHeaders)) {
-      responseHeaders.set(key, value)
-    }
-  }
-
-  return new NextResponse(JSON.stringify(response), {
-    status: result.plugin ? 200 : 202,
-    headers: responseHeaders,
-  })
+  return NextResponse.redirect(replacement, 308)
 }

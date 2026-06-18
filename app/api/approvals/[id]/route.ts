@@ -1,7 +1,7 @@
 import { executePermission } from "corsair"
-import { NextResponse } from "next/server"
+import { after, NextResponse } from "next/server"
 
-import { triggerSync } from "@/inngest/client"
+import { logReliableSyncFailure, requestReliableSync } from "@/lib/corsair/reliable-sync"
 import { ensureCorsairSetup, getCorsairInstance } from "@/lib/corsair/server"
 import { isSyncableCorsairPlugin, type SyncableCorsairPluginId } from "@/lib/corsair/sync"
 import { prisma } from "@/lib/db"
@@ -135,7 +135,14 @@ async function handleCorsairPermission(
     `
 
     if (ok && isSyncableCorsairPlugin(permission.plugin)) {
-      void triggerSync(tenantId, permission.plugin as SyncableCorsairPluginId, "approval")
+      const plugin = permission.plugin as SyncableCorsairPluginId
+      after(() =>
+        requestReliableSync({
+          tenantId,
+          plugin,
+          reason: "approval",
+        }).catch(logReliableSyncFailure(`approval ${plugin}`))
+      )
     }
 
     const updated = { ...permission, updated_at: now }

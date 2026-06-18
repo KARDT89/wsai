@@ -197,10 +197,11 @@ inngest/
 **Mail and calendar sync**
 
 1. Corsair receives a push webhook from Gmail/Google Calendar
-2. `app/api/corsair/webhook` enqueues a sync via Inngest (or directly calls `syncCorsairPlugin` via `after()`)
-3. `syncCorsairPlugin` pulls raw entities into `corsair_entities` rows in Postgres
-4. `GET /api/mail/threads` and `GET /api/calendar/events` read from `corsair_entities` via Prisma and map to typed responses
-5. TanStack Query on the client polls these routes (or invalidates on SSE push)
+2. `app/api/webhooks` calls `processWebhook`, letting Corsair route, verify, and update cached entities
+3. Corsair `webhookHooks.after` dispatches a durable Inngest sync request for reconciliation
+4. `syncCorsairPlugin` pulls raw entities into `corsair_entities` rows in Postgres
+5. `GET /api/mail/threads` and `GET /api/calendar/events` read from `corsair_entities` via Prisma and map to typed responses
+6. TanStack Query on the client polls these routes (or invalidates on SSE push)
 
 **AI agent write flow**
 
@@ -236,7 +237,7 @@ Configurable per-user in Settings → AI:
 3. Complete the Google OAuth consent screen — grant all requested scopes
 4. The integration syncs automatically after connection
 
-In local development, Corsair needs to reach your local server for webhook callbacks. Use [ngrok](https://ngrok.com) and set `CORSAIR_WEBHOOK_URL=https://your-subdomain.ngrok.io` in your `.env.local`.
+In local development, Corsair needs to reach your local server for webhook callbacks. Use [ngrok](https://ngrok.com), set `CORSAIR_WEBHOOK_URL=https://your-subdomain.ngrok.io` in your `.env.local`, and configure watches with the bare endpoint `/api/webhooks`. Gmail resolves the tenant from the Pub/Sub `emailAddress`; Calendar resolves it from the stored watch-channel ID.
 
 ---
 

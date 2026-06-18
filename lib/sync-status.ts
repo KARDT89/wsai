@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { prisma } from "@/lib/db"
 import type { GmailMailbox, SyncableCorsairPluginId } from "@/lib/corsair/sync"
 
-export type SyncScope = "all" | GmailMailbox
+export type SyncScope = "all" | "webhook" | GmailMailbox
 
 export type SyncStatusMetadata = {
   plugin: SyncableCorsairPluginId

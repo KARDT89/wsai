@@ -1,10 +1,4 @@
-<!-- BEGIN:nextjs-agent-rules -->
-# This is NOT the Next.js you know
-
 @AGENTS.md
-
-
-# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -79,73 +73,28 @@ WSAI is a SaaS AI workspace that replaces Gmail + Google Calendar. It is a **Nex
 | `CORSAIR_WEBHOOK_URL` | Override base URL for Corsair webhooks (use ngrok in local dev) |
 | `OPENROUTER_API_KEY` | Default model provider for the AI agent |
 
+### Task
+When you use Gmail or Google Calendar, it's likely a regular workflow takes a few more clicks than it should. Or maybe sending a calendar invite is too many steps on the UI. Many startups have tried to make managing your email and calendar seamless. But this is hard to do because everyone uses it slightly differently.
 
-# CLAUDE.md
+Corsair provides the building blocks to hundreds of integrations. You can use those building blocks to wire your app into almost any other app. You can also use Corsair's MCP to let any agent get full access to integrations so it can do things on your behalf. This means you can make new UIs that are set up exactly how you need, and power them using Corsair.
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+integration docs url: https://api.corsair.dev/md/integrations
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+Your task will be to create a Superhuman clone. Use Corsair to create Gmail and Google Calendar integrations. Use the Gmail API to make it more intuitive to search, draft, send, and receive emails. Use the Google Calendar API to make it easier to manage your schedule and send calendar invites and updates.
 
-## 1. Think Before Coding
+Once this is done, your email and calendar management will not be limited to how Google, Superhuman, or anyone else sees the way your workflows _should_ be. Instead, you can decide exactly what needs to be more prominent.
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+- **Probably the most high-value bonus task:** Add agent chat using the Corsair MCP. This will let users chat to send emails and calendar invites. For example, "Send a calendar invite to friend@corsair.dev at 9 AM next Thursday. Send him an email too saying I look forward to our meeting."
+- Use Corsair's built-in webhooks so you can get all new emails and calendar invites in realtime without having to poll the Google APIs
+- Add automatic email filtering. Send the email subject + body through a very cheap LLM to determine priority level
+- Wire in keystrokes so you can do common actions via the keyboard instead of having to click around
+- Use the Corsair search API to add a better UI around Gmail advanced search
 
-## 2. Simplicity First
 
-**Minimum code that solves the problem. Nothing speculative.**
 
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
----
-
-Agent Prompt: Gmail + Google Calendar Demo (Corsair + tRPC)
-Build a simple Next.js app with tRPC for listing, searching, drafting, and sending emails (Gmail) and calendar invites (Google Calendar). Wire everything through Corsair — do not call Google APIs directly.
+Agent Prompt: Gmail + Google Calendar Demo (Corsair)
+Build a simple Next.js app with for listing, searching, drafting, and sending emails (Gmail) and calendar invites (Google Calendar). Wire everything through Corsair — do not call Google APIs directly.
 
 What is Corsair?
 Corsair is an integration layer for third-party APIs. It provides:
@@ -287,4 +236,19 @@ Webhook route at /api/webhooks
 Tenant helper + email encoding utilities
 Run pnpm corsair list and pnpm corsair schema <endpoint> before writing Corsair calls.
 
-<!-- END:nextjs-agent-rules -->
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+## MVP Scope
+Already working:
+1. Auth
+2. Integrations page
+3. Gmail connect
+4. Calendar connect
+5. Email list/read/send
+6. Calendar list/create
+7. AI command box
+
+Missing:
+1. Realtime sync (corsair webhooks)
+2. AI agent with full Corsair tool access
+3. Permission/approval layer for dangerous actions

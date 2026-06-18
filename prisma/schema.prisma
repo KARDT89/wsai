@@ -184,6 +184,25 @@ model SyncStatus {
   @@map("sync_status")
 }
 
+model WebhookChannel {
+  id                String   @id @default(cuid())
+  tenantId          String   @map("tenant_id")
+  plugin            String
+  channelId         String   @unique @map("channel_id")
+  resourceId        String?  @map("resource_id")
+  externalAccountId String?  @map("external_account_id")
+  calendarId        String?  @map("calendar_id")
+  expiresAt         DateTime? @map("expires_at") @db.Timestamptz
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([tenantId])
+  @@index([plugin])
+  @@index([channelId])
+  @@index([expiresAt])
+  @@map("webhook_channels")
+}
+
 // settings
 
 model AgentSession {
@@ -214,4 +233,3 @@ model UserSettings {
 
   @@map("user_settings")
 }
-

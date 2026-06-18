@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server"
+import { after, NextResponse } from "next/server"
 
-import { triggerSync } from "@/inngest/client"
 import { ensureCorsairSetup, getCorsairInstance } from "@/lib/corsair/server"
+import { logReliableSyncFailure, requestReliableSync } from "@/lib/corsair/reliable-sync"
 import { getCurrentSession } from "@/lib/session"
 
 const threadActions = [
@@ -84,12 +84,12 @@ export async function POST(request: Request) {
         addLabelIds: [labelId],
         removeLabelIds: ["INBOX"],
       })
-      void triggerSync(session.user.id, "gmail", "user_action")
+      scheduleGmailSync(session.user.id, "mail snooze")
       return NextResponse.json({ thread: { id: payload.threadId } })
     }
 
     const result = await runThreadAction(gmail, payload.threadId, payload.action, payload.labelId)
-    void triggerSync(session.user.id, "gmail", "user_action")
+    scheduleGmailSync(session.user.id, `mail ${payload.action}`)
 
     return NextResponse.json({ thread: result })
   } catch (error) {
@@ -101,6 +101,16 @@ export async function POST(request: Request) {
       { status: 500 }
     )
   }
+}
+
+function scheduleGmailSync(tenantId: string, context: string) {
+  after(() =>
+    requestReliableSync({
+      tenantId,
+      plugin: "gmail",
+      reason: "user_action",
+    }).catch(logReliableSyncFailure(context))
+  )
 }
 
 function isThreadAction(action?: string): action is ThreadAction {

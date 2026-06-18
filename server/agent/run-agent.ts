@@ -2,7 +2,9 @@ import { OpenAIAgentsProvider } from "@corsair-dev/mcp"
 import { Agent, OpenAIProvider, Runner, tool } from "@openai/agents"
 
 import { ensureCorsairSetup, getCorsairAgentInstance } from "@/lib/corsair/server"
+import { logReliableSyncFailure, requestReliableSync } from "@/lib/corsair/reliable-sync"
 import { DEFAULT_MODEL } from "@/lib/agent-models"
+import type { SyncableCorsairPluginId } from "@/lib/corsair/sync"
 
 export { AVAILABLE_MODELS, DEFAULT_MODEL } from "@/lib/agent-models"
 export type { ModelId } from "@/lib/agent-models"
@@ -122,6 +124,23 @@ function labelForCorsairScript(code: string): string {
   return "Running Corsair operation"
 }
 
+function syncPluginForCorsairScript(code: string): SyncableCorsairPluginId | null {
+  if (
+    /gmail\.api\.messages\.(send|modify|batchModify|trash|delete|untrash)/.test(code) ||
+    /gmail\.api\.drafts\.(create|update|delete|send)/.test(code) ||
+    /gmail\.api\.threads\.(modify|trash|delete|untrash)/.test(code) ||
+    /gmail\.api\.labels\.(create|update|delete)/.test(code)
+  ) {
+    return "gmail"
+  }
+
+  if (/googlecalendar\.api\.events\.(create|update|delete)/.test(code)) {
+    return "googlecalendar"
+  }
+
+  return null
+}
+
 // ─── System prompt ──────────────────────────────────────────────────────────
 
 function buildApprovalInstructions(approvalStrict?: string | null): string {
@@ -219,6 +238,7 @@ export async function* streamWsaiAgentEvents(
 
   let toolIndex = 0
   const callIdToId = new Map<string, string>()
+  const callIdToSyncPlugin = new Map<string, SyncableCorsairPluginId>()
 
   for await (const event of result) {
     if (event.type === "run_item_stream_event") {
@@ -235,6 +255,17 @@ export async function* streamWsaiAgentEvents(
               : "{}"
         const id = `t${++toolIndex}`
         callIdToId.set(callId, id)
+        if (toolName === "run_script") {
+          let args: Record<string, unknown> = {}
+          try {
+            args = JSON.parse(rawArgs) as Record<string, unknown>
+          } catch {
+            // unparseable — no sync hint
+          }
+          const code = typeof args.code === "string" ? args.code : ""
+          const syncPlugin = syncPluginForCorsairScript(code)
+          if (syncPlugin) callIdToSyncPlugin.set(callId, syncPlugin)
+        }
         yield { type: "tool_start", id, label: labelForToolCall(toolName, rawArgs) }
       } else if (event.name === "tool_output") {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -242,6 +273,15 @@ export async function* streamWsaiAgentEvents(
         const callId: string = item.callId ?? ""
         const id = callIdToId.get(callId) ?? `t${toolIndex}`
         yield { type: "tool_done", id }
+        const syncPlugin = callIdToSyncPlugin.get(callId)
+        if (syncPlugin) {
+          void requestReliableSync({
+            tenantId,
+            plugin: syncPlugin,
+            reason: "user_action",
+          }).catch(logReliableSyncFailure(`agent ${syncPlugin}`))
+          callIdToSyncPlugin.delete(callId)
+        }
       }
     } else if (
       event.type === "raw_model_stream_event" &&

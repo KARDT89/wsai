@@ -4,7 +4,8 @@ import {
   ensureCorsairSetup,
   isKnownCorsairPlugin,
 } from "@/lib/corsair/server"
-import { syncCorsairPlugin, isSyncableCorsairPlugin } from "@/lib/corsair/sync"
+import { requestReliableSync } from "@/lib/corsair/reliable-sync"
+import { isSyncableCorsairPlugin } from "@/lib/corsair/sync"
 import { getCurrentSession } from "@/lib/session"
 
 export async function POST(
@@ -25,7 +26,13 @@ export async function POST(
 
   try {
     await ensureCorsairSetup(session.user.id)
-    const result = await syncCorsairPlugin(session.user.id, plugin, "manual")
+    const result = await requestReliableSync({
+      tenantId: session.user.id,
+      plugin,
+      reason: "manual",
+      inlineFallback: true,
+      enqueue: false,
+    })
 
     return NextResponse.json(result)
   } catch (error) {

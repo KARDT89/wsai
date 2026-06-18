@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server"
+import { after, NextResponse } from "next/server"
 
-import { triggerSync } from "@/inngest/client"
 import { ensureCorsairSetup, getCorsairInstance } from "@/lib/corsair/server"
+import { logReliableSyncFailure, requestReliableSync } from "@/lib/corsair/reliable-sync"
 import { getCurrentSession } from "@/lib/session"
 
 type CalendarEventInput = {
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
         event: payload.event,
         sendUpdates: "all",
       })
-      void triggerSync(session.user.id, "googlecalendar", "user_action")
+      scheduleCalendarSync(session.user.id, "calendar create")
       return NextResponse.json({ event })
     }
 
@@ -87,7 +87,7 @@ export async function POST(request: Request) {
         event: payload.event,
         sendUpdates: "all",
       })
-      void triggerSync(session.user.id, "googlecalendar", "user_action")
+      scheduleCalendarSync(session.user.id, "calendar update")
       return NextResponse.json({ event })
     }
 
@@ -96,7 +96,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "eventId is required for delete" }, { status: 400 })
       }
       await calendarApi.events.delete({ id: payload.eventId, sendUpdates: "all" })
-      void triggerSync(session.user.id, "googlecalendar", "user_action")
+      scheduleCalendarSync(session.user.id, "calendar delete")
       return NextResponse.json({ deleted: true })
     }
 
@@ -127,7 +127,7 @@ export async function POST(request: Request) {
         },
         sendUpdates: "none",
       })
-      void triggerSync(session.user.id, "googlecalendar", "user_action")
+      scheduleCalendarSync(session.user.id, "calendar rsvp")
       return NextResponse.json({ ok: true })
     }
 
@@ -140,3 +140,12 @@ export async function POST(request: Request) {
   }
 }
 
+function scheduleCalendarSync(tenantId: string, context: string) {
+  after(() =>
+    requestReliableSync({
+      tenantId,
+      plugin: "googlecalendar",
+      reason: "user_action",
+    }).catch(logReliableSyncFailure(context))
+  )
+}

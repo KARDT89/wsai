@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+
 import { gmail } from "@corsair-dev/gmail"
 import type { GmailPluginOptions } from "@corsair-dev/gmail"
 import { googlecalendar } from "@corsair-dev/googlecalendar"
@@ -6,6 +8,12 @@ import { createCorsair } from "corsair"
 import type { CorsairPlugin } from "corsair/core"
 import { setupCorsair, type SetupCredentials } from "corsair/setup"
 import { Pool } from "pg"
+
+import { inngest } from "@/inngest/client"
+import {
+  findActiveWebhookChannel,
+  recordWebhookChannel,
+} from "@/lib/corsair/webhook-channels"
 
 
 const globalForCorsair = globalThis as unknown as {
@@ -66,6 +74,11 @@ const CALENDAR_ALL_APPROVAL_OVERRIDES = {
   ...CALENDAR_WRITE_APPROVAL_OVERRIDES,
 } satisfies CalendarApprovalOverrides
 
+const WEBHOOK_SYNC_EVENT_NAMES = {
+  gmail: "corsair/gmail.sync.requested",
+  googlecalendar: "corsair/calendar.sync.requested",
+} as const
+
 function normalizeApprovalStrict(value?: string | null): ApprovalStrict {
   if (value === "all" || value === "never") return value
   return "writes"
@@ -101,6 +114,13 @@ function createCorsairPlugins({
   const gmailPlugin = withOAuthScopes(
     gmail({
       permissions: getGmailPermissions(approvalStrict),
+      webhookHooks: {
+        messageChanged: {
+          after: async (ctx, result) => {
+            await enqueueWebhookSync("gmail", ctx, result)
+          },
+        },
+      },
     }),
     [
       "https://www.googleapis.com/auth/gmail.modify",
@@ -112,6 +132,13 @@ function createCorsairPlugins({
   const googleCalendarPlugin = withOAuthScopes(
     googlecalendar({
       permissions: getCalendarPermissions(approvalStrict),
+      webhookHooks: {
+        onEventChanged: {
+          after: async (ctx, result) => {
+            await enqueueWebhookSync("googlecalendar", ctx, result)
+          },
+        },
+      },
     }),
     [
       "https://www.googleapis.com/auth/calendar",
@@ -142,6 +169,11 @@ export function getAppUrl() {
 
 export function getCorsairRedirectUri() {
   return `${getAppUrl()}/api/corsair/callback`
+}
+
+export function getCorsairWebhookUrl(_tenantId?: string) {
+  void _tenantId
+  return `${getAppUrl()}/api/webhooks`
 }
 
 export function getCorsairInstance() {
@@ -213,6 +245,15 @@ export async function ensureCorsairSetup(tenantId: string, backfill = false) {
     backfill,
   })
 
+  if (backfill) {
+    await ensureGoogleCalendarWebhookChannel(tenantId).catch((error) => {
+      console.warn(
+        "[corsair:googlecalendar] Unable to register Calendar webhook channel:",
+        error instanceof Error ? error.message : error
+      )
+    })
+  }
+
   setupDoneFor.add(cacheKey)
   return [integrationLog, tenantLog].filter(Boolean).join("\n")
 }
@@ -237,11 +278,27 @@ export function getCorsairCredentials(): SetupCredentials {
   ])
 
   if (google) {
-    credentials.gmail = google
+    credentials.gmail = {
+      ...google,
+      ...getOptionalCredentialFields({
+        topic_id: ["CORSAIR_GMAIL_TOPIC_ID", "GMAIL_TOPIC_ID"],
+      }),
+    }
     credentials.googlecalendar = google
   }
 
   return credentials
+}
+
+function getOptionalCredentialFields(fields: Record<string, string[]>) {
+  const result: Record<string, string> = {}
+
+  for (const [field, envKeys] of Object.entries(fields)) {
+    const value = envKeys.map((key) => process.env[key]).find(Boolean)
+    if (value) result[field] = value
+  }
+
+  return result
 }
 
 export function getMissingCredentialLabels(pluginId: string) {
@@ -294,5 +351,133 @@ function withOAuthScopes<TPlugin extends CorsairPlugin>(
           },
         }
       : plugin.oauthConfig,
+  }
+}
+
+async function ensureGoogleCalendarWebhookChannel(tenantId: string) {
+  const calendarId = "primary"
+  const activeChannel = await findActiveWebhookChannel({
+    tenantId,
+    plugin: "googlecalendar",
+    calendarId,
+  })
+
+  if (activeChannel) return
+
+  const tenant = getCorsairInstance().withTenant(tenantId)
+  const calendarClient = tenant.googlecalendar as unknown as {
+    api: {
+      events: {
+        getMany: (args: {
+          calendarId?: string
+          timeMin?: string
+          timeMax?: string
+          maxResults?: number
+        }) => Promise<unknown>
+      }
+    }
+    keys?: {
+      get_access_token?: () => Promise<string | null>
+    }
+  }
+
+  const now = new Date()
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+
+  // Touch the plugin first so Corsair refreshes and persists the access token.
+  await calendarClient.api.events.getMany({
+    calendarId,
+    timeMin: now.toISOString(),
+    timeMax: tomorrow.toISOString(),
+    maxResults: 1,
+  })
+
+  const accessToken = await calendarClient.keys?.get_access_token?.()
+  if (!accessToken) {
+    throw new Error("Google Calendar access token is unavailable.")
+  }
+
+  const channelId = randomUUID()
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/watch`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        id: channelId,
+        type: "web_hook",
+        address: getCorsairWebhookUrl(),
+      }),
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error(`Calendar watch failed: ${await response.text()}`)
+  }
+
+  const payload = (await response.json()) as {
+    resourceId?: string
+    expiration?: string
+  }
+  const expirationMs = payload.expiration ? Number(payload.expiration) : NaN
+
+  await recordWebhookChannel({
+    tenantId,
+    plugin: "googlecalendar",
+    channelId,
+    resourceId: payload.resourceId,
+    calendarId,
+    expiresAt: Number.isFinite(expirationMs) ? new Date(expirationMs) : null,
+  })
+}
+
+async function enqueueWebhookSync(
+  plugin: keyof typeof WEBHOOK_SYNC_EVENT_NAMES,
+  ctx: unknown,
+  result: unknown
+) {
+  const tenantId = getWebhookTenantId(ctx)
+
+  if (!tenantId) {
+    console.warn(`[corsair:${plugin}] Webhook processed without tenantId; skipping sync dispatch.`)
+    return
+  }
+
+  await inngest.send({
+    name: WEBHOOK_SYNC_EVENT_NAMES[plugin],
+    data: {
+      tenantId,
+      plugin,
+      reason: "webhook",
+      webhook: summarizeWebhookResult(result),
+    },
+  })
+}
+
+function getWebhookTenantId(ctx: unknown) {
+  if (!ctx || typeof ctx !== "object") return null
+
+  const tenantId = (ctx as { tenantId?: unknown }).tenantId
+  return typeof tenantId === "string" && tenantId.length > 0 ? tenantId : null
+}
+
+function summarizeWebhookResult(result: unknown) {
+  if (!result || typeof result !== "object") return undefined
+
+  const data = (result as { data?: unknown }).data
+  if (!data || typeof data !== "object") return undefined
+
+  const type = (data as { type?: unknown }).type
+  const corsairEntityId = (result as { corsairEntityId?: unknown }).corsairEntityId
+
+  return {
+    type: typeof type === "string" ? type : undefined,
+    corsairEntityId:
+      typeof corsairEntityId === "string" && corsairEntityId.length > 0
+        ? corsairEntityId
+        : undefined,
   }
 }
